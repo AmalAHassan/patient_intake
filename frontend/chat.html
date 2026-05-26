@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patient Intake</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f0f2f5;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .container {
+    width: 420px;
+    height: 600px;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .header {
+    padding: 18px 20px;
+    background: #0F1B2D;
+    color: white;
+  }
+
+  .header h1 { font-size: 15px; font-weight: 600; }
+  .header p  { font-size: 12px; color: #7A9FCC; margin-top: 2px; }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+    word-wrap: break-word;
+  }
+
+  .bubble.bot {
+    background: #f0f2f5;
+    color: #1a1a1a;
+    border-bottom-left-radius: 4px;
+    align-self: flex-start;
+  }
+
+  .bubble.user {
+    background: #185FA5;
+    color: white;
+    border-bottom-right-radius: 4px;
+    align-self: flex-end;
+  }
+
+  .bubble.system {
+    background: #E1F5EE;
+    color: #0F6E56;
+    font-size: 12px;
+    border-radius: 8px;
+    align-self: center;
+    text-align: center;
+    max-width: 90%;
+  }
+
+  .typing {
+    display: flex;
+    gap: 4px;
+    padding: 12px 14px;
+    background: #f0f2f5;
+    border-radius: 16px;
+    border-bottom-left-radius: 4px;
+    align-self: flex-start;
+    width: fit-content;
+  }
+
+  .typing span {
+    width: 7px; height: 7px;
+    background: #aaa;
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30%            { transform: translateY(-6px); }
+  }
+
+  .summary-card {
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+    align-self: flex-start;
+    max-width: 85%;
+  }
+
+  .summary-card h3 {
+    font-size: 12px;
+    font-weight: 600;
+    color: #0F6E56;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .summary-card .field {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+    color: #333;
+  }
+
+  .summary-card .field label {
+    font-weight: 500;
+    color: #666;
+    min-width: 90px;
+  }
+
+  .slots {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-self: flex-start;
+    width: 80%;
+  }
+
+  .slot-btn {
+    padding: 8px 12px;
+    border: 1.5px solid #185FA5;
+    border-radius: 8px;
+    background: white;
+    color: #185FA5;
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s;
+  }
+
+  .slot-btn:hover {
+    background: #185FA5;
+    color: white;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 8px;
+    padding: 14px 16px;
+    border-top: 1px solid #eee;
+    background: white;
+  }
+
+  .input-row input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1.5px solid #e0e0e0;
+    border-radius: 24px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .input-row input:focus { border-color: #185FA5; }
+
+  .input-row button {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: #185FA5;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+
+  .input-row button:hover { background: #0F1B2D; }
+  .input-row button:disabled { background: #ccc; cursor: not-allowed; }
+
+  .input-row button svg { width: 18px; height: 18px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>Patient Intake</h1>
+    <p>Powered by Claude AI</p>
+  </div>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="input-row">
+    <input id="input" type="text" placeholder="Type a message..." autocomplete="off" />
+    <button id="send-btn" onclick="sendMessage()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"></line>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let sessionId = null;
+  let waitingForSlot = false;
+
+  const messagesEl = document.getElementById('messages');
+  const inputEl    = document.getElementById('input');
+  const sendBtn    = document.getElementById('send-btn');
+
+  // ── Helpers ────────────────────────────────────────────────────
+  function addBubble(text, type = 'bot') {
+    const div = document.createElement('div');
+    div.className = `bubble ${type}`;
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    scroll();
+    return div;
+  }
+
+  function addTyping() {
+    const div = document.createElement('div');
+    div.className = 'typing';
+    div.id = 'typing';
+    div.innerHTML = '<span></span><span></span><span></span>';
+    messagesEl.appendChild(div);
+    scroll();
+  }
+
+  function removeTyping() {
+    const t = document.getElementById('typing');
+    if (t) t.remove();
+  }
+
+  function scroll() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function setInputEnabled(enabled) {
+    inputEl.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+  }
+
+  // ── Summary card ───────────────────────────────────────────────
+  function showSummary(data) {
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    const fields = [
+      ['Name',       data.name],
+      ['Date of birth', data.dob],
+      ['Phone',      data.phone],
+      ['Insurance',  data.payer],
+      ['Member ID',  data.insurance_id],
+      ['Copay',      data.copay || 'Checking...'],
+      ['Reason',     data.reason],
+    ];
+    card.innerHTML = `<h3>✓ Intake complete</h3>` + fields
+      .filter(([, v]) => v)
+      .map(([l, v]) => `<div class="field"><label>${l}</label><span>${v}</span></div>`)
+      .join('');
+    messagesEl.appendChild(card);
+    scroll();
+  }
+
+  // ── Appointment slots ──────────────────────────────────────────
+  function showSlots() {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const fmt = d => d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+
+    const slots = [
+      { label: `${fmt(tomorrow)} at 9:00 AM`,        doctor: 'Dr. Emily Ross' },
+      { label: `${fmt(tomorrow)} at 2:00 PM`,        doctor: 'Dr. Marcus Webb' },
+      { label: `${fmt(new Date(Date.now()+2*86400000))} at 10:30 AM`, doctor: 'Dr. Aisha Nkosi' },
+    ];
+
+    addBubble('Please pick an appointment slot:', 'bot');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'slots';
+
+    slots.forEach(slot => {
+      const btn = document.createElement('button');
+      btn.className = 'slot-btn';
+      btn.innerHTML = `<strong>${slot.label}</strong><br><span style="font-size:12px;color:#666">${slot.doctor}</span>`;
+      btn.onclick = () => bookSlot(slot, wrapper);
+      wrapper.appendChild(btn);
+    });
+
+    messagesEl.appendChild(wrapper);
+    waitingForSlot = true;
+    setInputEnabled(false);
+    scroll();
+  }
+
+  function bookSlot(slot, wrapper) {
+    wrapper.remove();
+    waitingForSlot = false;
+    addBubble(`${slot.label} with ${slot.doctor}`, 'user');
+
+    setTimeout(() => {
+      const conf = document.createElement('div');
+      conf.className = 'bubble system';
+      conf.innerHTML = `✓ Appointment confirmed<br><strong>${slot.label}</strong><br>${slot.doctor}`;
+      messagesEl.appendChild(conf);
+      addBubble("You're all set! You'll receive a reminder before your appointment. Is there anything else I can help you with?", 'bot');
+      setInputEnabled(true);
+      scroll();
+    }, 400);
+  }
+
+  // ── API calls ──────────────────────────────────────────────────
+  async function startSession() {
+    setInputEnabled(false);
+    addTyping();
+    try {
+      const res = await fetch(`${API}/intake/start`, { method: 'POST' });
+      const data = await res.json();
+      sessionId = data.session_id;
+      removeTyping();
+      addBubble(data.message || "Hi! I'm your patient intake assistant. What's your full name?");
+    } catch (e) {
+      removeTyping();
+      addBubble("⚠️ Can't reach the backend at localhost:8000. Make sure uvicorn is running.", 'system');
+    }
+    setInputEnabled(true);
+    inputEl.focus();
+  }
+
+  async function sendMessage() {
+    const text = inputEl.value.trim();
+    if (!text || !sessionId || waitingForSlot) return;
+
+    addBubble(text, 'user');
+    inputEl.value = '';
+    setInputEnabled(false);
+    addTyping();
+
+    try {
+      const res = await fetch(`${API}/intake/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: text }),
+      });
+      const data = await res.json();
+      removeTyping();
+
+      if (data.status === 'complete' && data.data) {
+        addBubble(data.reply || "Great, I've got everything I need!", 'bot');
+        showSummary(data.data);
+        setTimeout(showSlots, 800);
+      } else {
+        addBubble(data.reply || data.message || 'Something went wrong.', 'bot');
+        setInputEnabled(true);
+      }
+    } catch (e) {
+      removeTyping();
+      addBubble('Error reaching the server. Is your backend running?', 'system');
+      setInputEnabled(true);
+    }
+
+    inputEl.focus();
+  }
+
+  // Enter key to send
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  // ── Boot ───────────────────────────────────────────────────────
+  startSession();
+</script>
+</body>
+</html>
