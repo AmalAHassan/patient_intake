@@ -1,49 +1,54 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import uuid
 from services import claude, fhir_client
 from models import SessionLocal, IntakeSession, Patient
-
+ 
 router = APIRouter()
-
-
+ 
+ 
 class MessageRequest(BaseModel):
     session_id: str
     message: str
-
-
+ 
+ 
+class StartRequest(BaseModel):
+    name: Optional[str] = None
+ 
+ 
 class StartResponse(BaseModel):
     session_id: str
     message: str
-
-
+ 
+ 
 @router.post("/start", response_model=StartResponse)
-async def start_intake():
-    """Start a new intake session."""
+async def start_intake(body: StartRequest = StartRequest()):
+    """Start a new intake session — Claude sends the first message."""
     session_id = str(uuid.uuid4())
-
+ 
     db = SessionLocal()
     session = IntakeSession(session_id=session_id)
     db.add(session)
     db.commit()
     db.close()
-
-    initial_message = "Hello! I'm your patient intake assistant. Let's get started. What is your full name?"
-
-    return {"session_id": session_id, "message": initial_message}
-
-
+ 
+    # Kick off the conversation — Claude will ask "new or returning?"
+    response = await claude.chat(session_id, "__start__")
+    return {"session_id": session_id, "message": response["reply"]}
+ 
+ 
 @router.post("/message")
 async def send_message(request: MessageRequest):
     """Process a user message in an intake session."""
     try:
         response = await claude.chat(request.session_id, request.message)
-
+ 
         if response["status"] == "complete" and response["data"]:
             collected_data = response["data"]
             patient_id = str(uuid.uuid4())
             fhir_id = fhir_client.create_patient(collected_data)
-
+ 
             db = SessionLocal()
             patient = Patient(
                 id=patient_id,
@@ -57,7 +62,7 @@ async def send_message(request: MessageRequest):
                 reason_for_visit=collected_data.get("reason"),
             )
             db.add(patient)
-
+ 
             session = db.query(IntakeSession).filter(
                 IntakeSession.session_id == request.session_id
             ).first()
@@ -65,10 +70,10 @@ async def send_message(request: MessageRequest):
                 session.patient_id = patient_id
                 session.collected_data = collected_data
                 session.status = "completed"
-
+ 
             db.commit()
             db.close()
-
+ 
             return {
                 "reply": response["reply"],
                 "status": "complete",
@@ -76,12 +81,13 @@ async def send_message(request: MessageRequest):
                 "patient_id": patient_id,
                 "fhir_id": fhir_id or patient_id,
             }
-
+ 
         return {
             "reply": response["reply"],
             "status": response["status"],
             "data": response.get("data"),
         }
-
+ 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+ 

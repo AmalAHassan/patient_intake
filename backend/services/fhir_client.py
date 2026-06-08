@@ -10,11 +10,18 @@ def create_patient(data: dict) -> str:
         telecom.append({"system": "phone", "value": data["phone"]})
     if data.get("email"):
         telecom.append({"system": "email", "value": data["email"]})
+        
+    def _format_dob(dob: str) -> str:
+        """Convert MM/DD/YYYY to YYYY-MM-DD for FHIR R4."""
+        try:
+            return datetime.strptime(dob, "%m/%d/%Y").strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            return dob  # pass through if already formatted or empty
 
     patient_resource = {
         "resourceType": "Patient",
         "name": [{"text": data.get("name", "")}],
-        "birthDate": data.get("dob", ""),
+        "birthDate": _format_dob(data.get("dob", "")),
         "telecom": telecom,
         "contact": [
             {

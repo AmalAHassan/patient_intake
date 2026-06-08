@@ -33,8 +33,21 @@
     color: white;
   }
 
-  .header h1 { font-size: 15px; font-weight: 600; }
-  .header p  { font-size: 12px; color: #7A9FCC; margin-top: 2px; }
+  .header { display: flex; align-items: center; justify-content: space-between; }
+  .header-text h1 { font-size: 15px; font-weight: 600; }
+  .header-text p  { font-size: 12px; color: #7A9FCC; margin-top: 2px; }
+
+  .restart-btn {
+    background: transparent;
+    border: 1px solid #7A9FCC;
+    color: #7A9FCC;
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .restart-btn:hover { background: #7A9FCC; color: #0F1B2D; }
 
   .messages {
     flex: 1;
@@ -203,8 +216,11 @@
 
 <div class="container">
   <div class="header">
-    <h1>Patient Intake</h1>
-    <p>Powered by Claude AI</p>
+    <div class="header-text">
+      <h1>Patient Intake</h1>
+      <p>Powered by Claude AI</p>
+    </div>
+    <button class="restart-btn" onclick="restartSession()">Start over</button>
   </div>
 
   <div class="messages" id="messages"></div>
@@ -262,76 +278,25 @@
     inputEl.disabled = !enabled;
     sendBtn.disabled = !enabled;
   }
-
-  // ── Summary card ───────────────────────────────────────────────
-  function showSummary(data) {
-    const card = document.createElement('div');
-    card.className = 'summary-card';
-    const fields = [
-      ['Name',       data.name],
-      ['Date of birth', data.dob],
-      ['Phone',      data.phone],
-      ['Insurance',  data.payer],
-      ['Member ID',  data.insurance_id],
-      ['Copay',      data.copay || 'Checking...'],
-      ['Reason',     data.reason],
-    ];
-    card.innerHTML = `<h3>✓ Intake complete</h3>` + fields
-      .filter(([, v]) => v)
-      .map(([l, v]) => `<div class="field"><label>${l}</label><span>${v}</span></div>`)
-      .join('');
-    messagesEl.appendChild(card);
-    scroll();
-  }
-
-  // ── Appointment slots ──────────────────────────────────────────
-  function showSlots() {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const fmt = d => d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
-
-    const slots = [
-      { label: `${fmt(tomorrow)} at 9:00 AM`,        doctor: 'Dr. Emily Ross' },
-      { label: `${fmt(tomorrow)} at 2:00 PM`,        doctor: 'Dr. Marcus Webb' },
-      { label: `${fmt(new Date(Date.now()+2*86400000))} at 10:30 AM`, doctor: 'Dr. Aisha Nkosi' },
-    ];
-
-    addBubble('Please pick an appointment slot:', 'bot');
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'slots';
-
-    slots.forEach(slot => {
-      const btn = document.createElement('button');
-      btn.className = 'slot-btn';
-      btn.innerHTML = `<strong>${slot.label}</strong><br><span style="font-size:12px;color:#666">${slot.doctor}</span>`;
-      btn.onclick = () => bookSlot(slot, wrapper);
-      wrapper.appendChild(btn);
-    });
-
-    messagesEl.appendChild(wrapper);
-    waitingForSlot = true;
-    setInputEnabled(false);
-    scroll();
-  }
-
-  function bookSlot(slot, wrapper) {
-    wrapper.remove();
-    waitingForSlot = false;
-    addBubble(`${slot.label} with ${slot.doctor}`, 'user');
-
-    setTimeout(() => {
-      const conf = document.createElement('div');
-      conf.className = 'bubble system';
-      conf.innerHTML = `✓ Appointment confirmed<br><strong>${slot.label}</strong><br>${slot.doctor}`;
-      messagesEl.appendChild(conf);
-      addBubble("You're all set! You'll receive a reminder before your appointment. Is there anything else I can help you with?", 'bot');
+  // And simplify the complete handler to just:
+  if (data.status === 'complete' && data.data) {
+      addBubble(data.reply, 'bot');   // just show Claude's message
+      setInputEnabled(false);
+      inputEl.placeholder = "Intake complete.";
+  } else {
+      addBubble(data.reply, 'bot');
       setInputEnabled(true);
-      scroll();
-    }, 400);
+  }
+  // ── API calls ──────────────────────────────────────────────────
+  function restartSession() {
+    sessionId = null;
+    waitingForSlot = false;
+    messagesEl.innerHTML = '';
+    inputEl.value = '';
+    inputEl.placeholder = "Type a message...";
+    startSession();
   }
 
-  // ── API calls ──────────────────────────────────────────────────
   async function startSession() {
     setInputEnabled(false);
     addTyping();

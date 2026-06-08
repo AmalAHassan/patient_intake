@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from models import init_db
 from routes import intake, eligibility
+from services.patient_lookup import load_patients
 
 app = FastAPI(title="Patient Intake API")
 
@@ -20,6 +21,7 @@ app.include_router(eligibility.router, prefix="/eligibility", tags=["eligibility
 @app.on_event("startup")
 def startup():
     init_db()
+    load_patients()
 
 
 @app.get("/health")

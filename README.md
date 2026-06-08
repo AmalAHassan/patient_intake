@@ -5,7 +5,7 @@
 The backend relies on PostgreSQL, Redis, and HAPI FHIR. Start them from the repository root:
 
 ```bash
-cd patient_onboarding/patient-intake
+cd patient-intake
 docker-compose up -d
 ```
 
@@ -34,7 +34,7 @@ python main.py
 Or using `uvicorn`:
 
 ```bash
-cd backend
+cd patient_intake/backend
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
