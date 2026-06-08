@@ -1,6 +1,6 @@
 import requests
 from datetime import datetime
-from config import settings
+#from config import settings
 
 
 def create_patient(data: dict) -> str:

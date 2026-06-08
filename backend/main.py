@@ -1,10 +1,21 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from models import init_db
-from routes import intake, eligibility
+from routes import intake
 from services.patient_lookup import load_patients
 
-app = FastAPI(title="Patient Intake API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    init_db()
+    load_patients()
+    yield
+    # Shutdown (nothing to do yet)
+
+
+app = FastAPI(title="Patient Intake API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,13 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(intake.router, prefix="/intake", tags=["intake"])
-app.include_router(eligibility.router, prefix="/eligibility", tags=["eligibility"])
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    load_patients()
+# eligibility route removed — handled by MCP eligibility server on port 5002
 
 
 @app.get("/health")
