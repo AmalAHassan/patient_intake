@@ -14,13 +14,28 @@ class Patient(Base):
 
     id = Column(String, primary_key=True, index=True)
     fhir_id = Column(String, unique=True, index=True)
+
+    # Identity
     name = Column(String)
     dob = Column(String)
     phone = Column(String)
     email = Column(String, index=True)
+
+    # Insurance
     insurance_id = Column(String)
     payer = Column(String)
+    copay = Column(String)
+
+    # Visit
+    department = Column(String)
     reason_for_visit = Column(String)
+
+    # Appointment
+    appointment_doctor = Column(String)
+    appointment_date = Column(String)
+    appointment_time = Column(String)
+
+    # Meta
     created_at = Column(DateTime, default=datetime.utcnow)
     extra_data = Column(JSON, default={})
 

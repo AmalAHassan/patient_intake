@@ -1,61 +1,44 @@
 """
 claude.py — Conversational intake loop.
 
-Uses inline tools that call MCP server logic directly.
-MCP servers still run as separate processes for future remote deployment,
-but the Anthropic API calls tools inline (no URL required).
+SYSTEM_PROMPT = conversation flow only (steps 1-8, JSON format, validation)
+AGENT_GUIDELINES.md = clinical rules, emergency handling, behavior rules
 
-To switch to remote MCP when deployed: replace TOOLS + tool execution
-with mcp_servers=MCP_SERVERS in the API call.
+Tool calls route through mcp_client.py → local MCP servers.
+
+To switch to remote MCP (ngrok or deployed):
+  1. Update MCP_SERVERS list below with public URLs
+  2. Swap messages.create() to beta.messages.create(mcp_servers=MCP_SERVERS)
+  3. Remove tools=TOOLS and the tool execution loop
 """
 import json
 import os
+import asyncio
+import pathlib
 import redis
+import httpx
 from anthropic import Anthropic
 from config import settings
+from services.mcp_client import call_tool
 
-redis_client = redis.from_url(settings.redis_url)
+CRISIS_NOTIFIER_URL = os.getenv("CRISIS_NOTIFIER_URL", "http://localhost:8001")
+
+redis_client     = redis.from_url(settings.redis_url)
 anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
 
-MODEL = "claude-haiku-4-5"
+MODEL              = "claude-haiku-4-5"
 MAX_TOOL_ITERATIONS = 10
-MAX_LOOKUP_RETRIES = 3
+MAX_LOOKUP_RETRIES  = 3
 
-# ── Import service logic directly ──────────────────────────────────────────
-from services.patient_lookup import find_patient
-from services.fhir_client import create_patient
-
-# Inline eligibility mock — same logic as mcp_servers/eligibility/server.py
-def _check_eligibility(insurance_id: str, payer: str) -> dict:
-    if not insurance_id or insurance_id == "NONE":
-        return {"covered": False, "status": "not_found", "payer": payer}
-    if "medicare" in payer.lower():
-        return {"covered": True, "status": "active", "plan": "Medicare Part B", "copay": 20.00, "payer": payer}
-    if insurance_id.upper().startswith("TERM"):
-        return {"covered": False, "status": "inactive", "payer": payer}
-    return {"covered": True, "status": "active", "plan": "PPO", "copay": 25.00,
-            "deductible": 1500.00, "payer": payer, "member_id": insurance_id}
-
-# Inline slots — same data as mcp_servers/hapi_fhir/server.py
-SLOTS = [
-    {"id": "s1",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Mon Jun 9",  "time": "9:00 AM"},
-    {"id": "s2",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Mon Jun 9",  "time": "11:30 AM"},
-    {"id": "s3",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Tue Jun 10", "time": "1:00 PM"},
-    {"id": "s4",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": "Tue Jun 10", "time": "8:30 AM"},
-    {"id": "s5",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": "Wed Jun 11", "time": "10:00 AM"},
-    {"id": "s6",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": "Mon Jun 9",  "time": "2:00 PM"},
-    {"id": "s7",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": "Thu Jun 12", "time": "9:30 AM"},
-    {"id": "s8",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": "Wed Jun 11", "time": "3:00 PM"},
-    {"id": "s9",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": "Fri Jun 13", "time": "8:00 AM"},
-    {"id": "s10", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": "Mon Jun 9",  "time": "10:00 AM"},
-    {"id": "s11", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": "Mon Jun 9",  "time": "3:30 PM"},
-    {"id": "s12", "doctor": "Dr. Santos", "specialty": "Mental Health",   "date": "Thu Jun 12", "time": "11:00 AM"},
-    {"id": "s13", "doctor": "Dr. Adams",  "specialty": "Dermatology",     "date": "Fri Jun 13", "time": "9:00 AM"},
-    {"id": "s14", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": "Tue Jun 10", "time": "2:30 PM"},
-    {"id": "s15", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": "Wed Jun 11", "time": "8:00 AM"},
+# ── Remote MCP server list (used when switching to beta.messages.create) ───
+# Update these URLs when using ngrok or deploying
+MCP_SERVERS = [
+    {"type": "url", "url": os.getenv("MCP_PATIENT_LOOKUP_URL", "http://localhost:5001/sse"), "name": "patient-lookup"},
+    {"type": "url", "url": os.getenv("MCP_ELIGIBILITY_URL",    "http://localhost:5002/sse"), "name": "eligibility"},
+    {"type": "url", "url": os.getenv("MCP_EHR_URL",            "http://localhost:5003/sse"), "name": "ehr"},
 ]
 
-# ── Tool definitions ───────────────────────────────────────────────────────
+# ── Tool schema (used with local routing via mcp_client) ───────────────────
 TOOLS = [
     {
         "name": "lookup_patient",
@@ -64,9 +47,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "name":  {"type": "string"},
-                "dob":   {"type": "string"}
+                "dob":   {"type": "string"},
+                "phone": {"type": "string"},
             },
-            "required": ["name", "dob"],
+            "required": ["name"],
         },
     },
     {
@@ -115,10 +99,22 @@ TOOLS = [
     },
 ]
 
-# ── System prompt ──────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a friendly front-desk medical receptionist. Speak in short, natural sentences (1-2 lines). One question per turn. Never ask more than one question at a time.
+# ── Load clinical guidelines ───────────────────────────────────────────────
+def _load_guidelines() -> str:
+    for path in [
+        pathlib.Path(__file__).parent.parent.parent / "AGENT_GUIDELINES.md",
+        pathlib.Path(__file__).parent.parent / "AGENT_GUIDELINES.md",
+    ]:
+        if path.exists():
+            return "\n\n---\nCLINICAL GUIDELINES (follow these exactly):\n" + path.read_text()
+    return ""
 
-When the user says "begin", that means the conversation is just starting — respond with your opening greeting only.
+# ── System prompt — conversation flow only ────────────────────────────────
+# Clinical rules, emergency handling, and behavior rules live in
+# AGENT_GUIDELINES.md and are appended at runtime via _load_guidelines().
+SYSTEM_PROMPT = """You are a friendly front-desk medical receptionist AI.
+Speak in short natural sentences. One question per turn. Never ask more than one question at a time.
+When the user says "begin" respond with your opening greeting only.
 
 STEP 1 — NEW OR RETURNING
 Your very first message must always be:
@@ -126,116 +122,145 @@ Your very first message must always be:
 Wait for their answer before doing anything else.
 
 STEP 2 — IDENTITY
+
 RETURNING patient:
-  - Ask for their full name.
-  - Then ask for date of birth (MM/DD/YYYY) OR last 4 digits of their phone — either works.
-  - As soon as you have name + one identifier, call the `lookup_patient` tool.
-  - If tool returns a record: greet them by first name and go to STEP 3.
-  - If tool returns NOT_FOUND: say "I don't see you in our system — let me set you up as a new patient." then follow NEW patient flow from STEP 3.
-  - If tool returns match_count > 1: ask one clarifying question before retrying. Max 3 retries.
+  Ask for full name, then date of birth (MM/DD/YYYY) only.
+  As soon as you have name + DOB, call `lookup_patient`.
+  If record found:
+    - Show only city and state: "I found a record — can you confirm the city and state we have on file?"
+    - If match: go to STEP 3.
+    - If no match: ask for zip code as secondary check.
+    - If zip also fails: output {"status": "staff_requested"}
+  If NOT_FOUND:
+    - Offer retry or new patient registration. Max 3 retries.
+  If match_count > 1:
+    - Ask for zip code to narrow down. Max 3 retries.
 
 NEW patient:
-  - Collect in this order, one question at a time: full name, date of birth (MM/DD/YYYY), phone number, email address.
-  - Then go to STEP 3.
+  Collect one at a time: full name → DOB (MM/DD/YYYY) → phone → email.
+  Validate each field using the rules in CLINICAL GUIDELINES before accepting.
+  Then go to STEP 3.
 
-STEP 3 — CONFIRM / COLLECT DETAILS
-RETURNING patient:
-  - Show what you have on file and ask if it's still correct.
-  - If yes: move on. If something changed: ask what changed and update it.
-
-NEW patient:
-  - You already collected these in STEP 2 — skip straight to STEP 4.
+STEP 3 — CONFIRM DETAILS
+RETURNING: confirm phone (last 4 digits only) and email on file. Update if changed.
+NEW: skip to STEP 4.
 
 STEP 4 — INSURANCE
-RETURNING patient:
-  - Say "I see you have {insurance_provider} on file — is that still active?"
-  - If yes: call `check_eligibility` with the member_id and payer from the record.
-  - If no or changed: ask for new payer name, then new member ID, then call `check_eligibility`.
-  - After check_eligibility returns: tell the patient their copay.
-
-NEW patient:
-  - Ask "What insurance do you have?" then ask for their member ID.
-  - If self-pay: set payer to "Self-pay" and insurance_id to "NONE". Skip eligibility check.
-  - Otherwise call `check_eligibility` and share the copay result.
+RETURNING: confirm insurance on file. Call `check_eligibility`. Share copay result.
+NEW: ask for payer name and member ID. Call `check_eligibility`. Share copay result.
+     If self-pay: set payer="Self-pay", insurance_id="NONE". Skip eligibility check.
+     Always use EXACTLY what the patient typed for payer name — never rename it.
 
 STEP 5 — DEPARTMENT
 Ask: "Which department are you visiting today?"
-List options numbered 1-8: Family Medicine, OB/GYN, Cardiology, Urgent Care, Mental Health, Dermatology, Pediatrics, Other.
+Options: 1. Family Medicine  2. OB/GYN  3. Cardiology  4. Urgent Care
+         5. Mental Health    6. Dermatology  7. Pediatrics  8. Other
 
 STEP 6 — REASON FOR VISIT
 Ask: "Briefly describe why you're coming in today — your doctor will see this before your appointment."
-Accept their free-text answer exactly as typed.
+Accept free text exactly as typed.
+Then immediately run the EMERGENCY CHECK and DEPARTMENT ALIGNMENT CHECK
+defined in CLINICAL GUIDELINES before proceeding.
 
 STEP 7 — SCHEDULING
-Call the `fhir_get_slots` tool with the chosen department.
-Present returned slots numbered, one per line. Wait for them to pick a number.
+Call `fhir_get_slots` with the chosen department.
+Present slots numbered, one per line. Wait for patient to pick a number.
 
 STEP 8 — SAVE AND COMPLETE
 Call `fhir_create_patient` with all collected fields.
-Then say exactly:
-"Perfect! You're booked with [doctor] on [date] at [time]. You're all set — see you soon! ✓"
+Say: "Perfect! You're booked with [doctor] on [date] at [time]. You're all set — see you soon! ✓"
 
-Then on a new line output ONLY this JSON and nothing else:
+Then output ONLY this JSON on a new line:
 {"status": "complete", "data": {"name": "", "dob": "", "phone": "", "email": "", "insurance_id": "", "payer": "", "copay": "", "department": "", "reason": "", "appointment_doctor": "", "appointment_date": "", "appointment_time": ""}}
 
-After completion, if the patient says anything else, reply with exactly:
+After any completion or redirect, if the patient says anything else reply with:
 {"status": "ended"}
 """
 
 
-# ── Tool execution ─────────────────────────────────────────────────────────
-def _execute_tool(name: str, inputs: dict) -> str:
-    if name == "lookup_patient":
-        record = find_patient(
-            name=inputs.get("name"),
-            dob=inputs.get("dob") or None,
-            phone=inputs.get("phone") or None,
-        )
-        return json.dumps(record) if record else "NOT_FOUND"
+# ── Crisis alert ───────────────────────────────────────────────────────────
+async def _send_crisis_alert(
+    session_id: str,
+    alert_type: str,
+    reason: str,
+    client_ip: str = "unknown"
+):
+    patient_name    = "unknown"
+    patient_address = "unknown"
+    try:
+        collected_json = redis_client.get(f"session:{session_id}:collected")
+        if collected_json:
+            c = json.loads(collected_json)
+            patient_name    = c.get("name", "unknown")
+            patient_address = c.get("address", "unknown")
+        if patient_name == "unknown":
+            history_json = redis_client.get(f"session:{session_id}:history")
+            if history_json:
+                for msg in json.loads(history_json):
+                    if isinstance(msg.get("content"), list):
+                        for block in msg["content"]:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                try:
+                                    data = json.loads(block.get("content", "{}"))
+                                    if isinstance(data, dict) and data.get("name"):
+                                        patient_name    = data.get("name", "unknown")
+                                        patient_address = data.get("address", "unknown")
+                                except Exception:
+                                    pass
+    except Exception as e:
+        print(f"[crisis] Could not extract patient info: {e}")
 
-    if name == "check_eligibility":
-        result = _check_eligibility(
-            insurance_id=inputs.get("insurance_id", ""),
-            payer=inputs.get("payer", ""),
-        )
-        return json.dumps(result)
-
-    if name == "fhir_get_slots":
-        dept = inputs.get("department", "").lower()
-        matched = [s for s in SLOTS if dept in s["specialty"].lower()]
-        return json.dumps(matched if matched else SLOTS[:3])
-
-    if name == "fhir_create_patient":
-        fhir_id = create_patient(inputs)
-        return json.dumps({"fhir_id": fhir_id, "status": "created"})
-
-    return json.dumps({"error": f"Unknown tool: {name}"})
+    payload = {
+        "type":            alert_type,
+        "session_id":      session_id,
+        "patient_name":    patient_name,
+        "patient_address": patient_address,
+        "client_ip":       client_ip,
+        "reason":          reason if isinstance(reason, str) else str(reason),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(f"{CRISIS_NOTIFIER_URL}/alert", json=payload)
+            print(f"[crisis] Alert sent: {alert_type} — {patient_name}")
+    except Exception as e:
+        print(f"[crisis] Could not reach notifier: {e}")
 
 
 # ── Main chat loop ─────────────────────────────────────────────────────────
-async def chat(session_id: str, user_message: str) -> dict:
-    history_key = f"session:{session_id}:history"
+async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -> dict:
+    history_key   = f"session:{session_id}:history"
     collected_key = f"session:{session_id}:collected"
 
     history_json = redis_client.get(history_key)
-    history = json.loads(history_json) if history_json else []
+    history      = json.loads(history_json) if history_json else []
 
-    if user_message == "__start__":
-        history.append({"role": "user", "content": "begin"})
-    else:
-        history.append({"role": "user", "content": user_message})
+    history.append({"role": "user", "content": "begin" if user_message == "__start__" else user_message})
 
     assistant_text = ""
-    lookup_count = 0
+    lookup_count   = 0
+    system         = SYSTEM_PROMPT + _load_guidelines()
 
     for _ in range(MAX_TOOL_ITERATIONS):
+
+        # ── LOCAL routing (current) ────────────────────────────────────────
+        # Tools schema sent to Claude; mcp_client routes execution to MCP servers
         response = anthropic_client.messages.create(
             model=MODEL,
             max_tokens=800,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=TOOLS,
             messages=history,
         )
+
+        # # ── REMOTE MCP (swap when ngrok/deployed) ─────────────────────────
+        # response = anthropic_client.beta.messages.create(
+        #     model=MODEL,
+        #     max_tokens=800,
+        #     system=system,
+        #     messages=history,
+        #     mcp_servers=MCP_SERVERS,
+        #     betas=["mcp-client-2025-04-04"],
+        # )
 
         if response.stop_reason != "tool_use":
             assistant_text = "".join(
@@ -244,13 +269,11 @@ async def chat(session_id: str, user_message: str) -> dict:
             history.append({"role": "assistant", "content": assistant_text})
             break
 
-        # Track lookup retries
         for block in response.content:
             if getattr(block, "name", "") == "lookup_patient":
                 lookup_count += 1
 
-        assistant_blocks = [_block_to_dict(b) for b in response.content]
-        history.append({"role": "assistant", "content": assistant_blocks})
+        history.append({"role": "assistant", "content": [_block_to_dict(b) for b in response.content]})
 
         tool_results = []
         for block in response.content:
@@ -259,11 +282,11 @@ async def chat(session_id: str, user_message: str) -> dict:
             if block.name == "lookup_patient" and lookup_count > MAX_LOOKUP_RETRIES:
                 content = "MAX_RETRIES_EXCEEDED — tell the patient a staff member will assist them."
             else:
-                content = _execute_tool(block.name, block.input)
+                content = await call_tool(block.name, block.input)
             tool_results.append({
-                "type": "tool_result",
+                "type":        "tool_result",
                 "tool_use_id": block.id,
-                "content": content,
+                "content":     content,
             })
 
         history.append({"role": "user", "content": tool_results})
@@ -272,25 +295,41 @@ async def chat(session_id: str, user_message: str) -> dict:
 
     result = {"reply": assistant_text, "status": "collecting", "data": None}
 
+    if '{"status": "emergency_redirect"}' in assistant_text:
+        friendly = assistant_text[:assistant_text.find('{"status": "emergency_redirect"}')].strip()
+        result.update({"reply": friendly, "status": "emergency_redirect"})
+        text_lower = assistant_text.lower()
+        is_crisis  = any(kw in text_lower for kw in ["988", "suicidal", "self-harm"])
+        asyncio.create_task(_send_crisis_alert(
+            session_id=session_id,
+            alert_type="mental_health_crisis" if is_crisis else "medical_emergency",
+            reason=history[-2]["content"] if len(history) >= 2 else "unknown",
+            client_ip=client_ip,
+        ))
+        return result
+
+    if '{"status": "staff_requested"}' in assistant_text:
+        friendly = assistant_text[:assistant_text.find('{"status": "staff_requested"}')].strip()
+        result.update({"reply": friendly, "status": "staff_requested"})
+        return result
+
     if '{"status": "complete"' in assistant_text:
         try:
             json_str = assistant_text[assistant_text.find('{"status": "complete"'):]
-            parsed = json.loads(json_str)
+            parsed   = json.loads(json_str)
             if parsed.get("status") == "complete":
-                result["status"] = "complete"
-                result["data"] = parsed.get("data", {})
-                for field in ["department", "copay", "appointment_doctor", "appointment_date", "appointment_time"]:
-                    result["data"].setdefault(field, "")
+                data = parsed.get("data", {})
+                for f in ["department","copay","appointment_doctor","appointment_date","appointment_time"]:
+                    data.setdefault(f, "")
                 friendly = assistant_text[:assistant_text.find('{"status": "complete"')].strip()
                 if not friendly:
-                    d = result["data"]
                     friendly = (
-                        f"Perfect! You're booked with {d.get('appointment_doctor', 'your doctor')}"
-                        f" on {d.get('appointment_date', '')} at {d.get('appointment_time', '')}."
+                        f"Perfect! You're booked with {data.get('appointment_doctor','your doctor')}"
+                        f" on {data.get('appointment_date','')} at {data.get('appointment_time','')}."
                         " You're all set — see you soon! ✓"
                     )
-                result["reply"] = friendly
-                redis_client.setex(collected_key, 86400, json.dumps(result["data"]))
+                result.update({"reply": friendly, "status": "complete", "data": data})
+                redis_client.setex(collected_key, 86400, json.dumps(data))
         except json.JSONDecodeError:
             pass
 

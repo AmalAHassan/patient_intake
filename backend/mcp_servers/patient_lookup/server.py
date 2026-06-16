@@ -52,5 +52,39 @@ def lookup_patient(name: str, dob: str = "", phone: str = "") -> str:
     return json.dumps(record)
 
 
+
+# ── HTTP /call endpoint for mcp_client.py ─────────────────────────────────
+# This lets FastAPI call tools directly without going through Anthropic.
+# When deploying with remote MCP, this endpoint is no longer needed.
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn as _uvicorn
+
+http_app = FastAPI()
+
+@http_app.post("/call")
+async def call_tool_http(request: Request):
+    body = await request.json()
+    tool_name  = body.get("tool")
+    tool_input = body.get("input", {})
+    try:
+        # Call the tool function directly by name
+        tool_fn = globals().get(tool_name)
+        if not tool_fn:
+            return JSONResponse({"error": f"Tool not found: {tool_name}"}, status_code=404)
+        result = tool_fn(**tool_input)
+        return JSONResponse({"result": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 if __name__ == "__main__":
+    import threading, uvicorn as _uv
+
+    # Run HTTP /call server on port 5101
+    def run_http():
+        _uv.run(http_app, host="127.0.0.1", port=5101, log_level="error")
+
+    threading.Thread(target=run_http, daemon=True).start()
+
+    # Run MCP SSE server on port 5001
     mcp.run(transport="sse", host="127.0.0.1", port=5001)
