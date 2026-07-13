@@ -9,243 +9,272 @@ export default function HomePage() {
   return (
     <>
       <Head>
-        <title>Ledelsea Health — AI Patient Intake</title>
-        <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet" />
+        <title>Lea Medical Center</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
       </Head>
 
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Barlow', sans-serif; background: #faf8f5; color: #1a1008; overflow-x: hidden; }
+        body { font-family: 'Inter', sans-serif; background: #fff; color: #0a1628; overflow-x: hidden; }
 
         nav {
           position: sticky; top: 0; z-index: 100;
-          background: rgba(250,248,245,0.95);
+          background: rgba(255,255,255,0.97);
           backdrop-filter: blur(8px);
-          border-bottom: 1px solid #e8ddd6;
-          padding: 0 48px;
+          border-bottom: 1px solid #e8edf5;
+          padding: 0 56px;
           display: flex; align-items: center; justify-content: space-between;
-          height: 64px;
+          height: 68px;
         }
         .nav-logo {
           display: flex; align-items: center; gap: 10px;
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 20px; font-weight: 700;
-          letter-spacing: 0.06em; text-transform: uppercase;
-          color: #2c1a14; text-decoration: none;
+          font-size: 18px; font-weight: 700; color: #0a1628;
+          text-decoration: none; letter-spacing: -0.01em;
         }
-        .nav-links { display: flex; align-items: center; gap: 32px; }
+        .nav-logo-icon {
+          width: 32px; height: 32px; border-radius: 8px;
+          background: #1a5ce4; display: flex; align-items: center;
+          justify-content: center;
+        }
+        .nav-links { display: flex; align-items: center; gap: 28px; }
         .nav-links a {
-          font-size: 14px; color: #5a4a44; text-decoration: none;
-          font-weight: 500; letter-spacing: 0.01em; transition: color 0.15s;
+          font-size: 14px; color: #4a5568; text-decoration: none;
+          font-weight: 500; transition: color 0.15s;
         }
-        .nav-links a:hover { color: #8b5e52; }
+        .nav-links a:hover { color: #1a5ce4; }
         .nav-cta {
-          background: #2c1a14 !important; color: #fff !important;
-          padding: 8px 20px; border-radius: 8px;
+          background: #1a5ce4 !important; color: #fff !important;
+          padding: 9px 20px; border-radius: 8px;
           font-size: 13px !important; font-weight: 600 !important;
+          transition: background 0.15s !important;
         }
-        .nav-cta:hover { background: #8b5e52 !important; }
+        .nav-cta:hover { background: #1449c0 !important; }
 
         .hero {
-          max-width: 1100px; margin: 0 auto;
-          padding: 80px 48px 60px;
+          background: linear-gradient(135deg, #f0f5ff 0%, #ffffff 60%);
+          padding: 80px 56px;
           display: grid; grid-template-columns: 1fr 1fr;
           gap: 64px; align-items: center;
+          max-width: 1200px; margin: 0 auto;
         }
-        .eyebrow {
-          font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
-          text-transform: uppercase; color: #8b5e52; margin-bottom: 16px;
+        .hero-tag {
+          display: inline-flex; align-items: center; gap: 6px;
+          background: #e8f0fe; color: #1a5ce4;
+          font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+          padding: 5px 12px; border-radius: 20px; margin-bottom: 20px;
         }
+        .hero-tag-dot { width: 6px; height: 6px; border-radius: 50%; background: #1a5ce4; }
         h1 {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 52px; font-weight: 700; line-height: 1.05;
-          color: #2c1a14; margin-bottom: 20px; letter-spacing: -0.01em;
+          font-family: 'Playfair Display', serif;
+          font-size: 48px; font-weight: 700; line-height: 1.1;
+          color: #0a1628; margin-bottom: 20px; letter-spacing: -0.02em;
         }
-        h1 span { color: #8b5e52; }
+        h1 em { color: #1a5ce4; font-style: normal; }
         .hero-sub {
-          font-size: 16px; color: #6b5a52; line-height: 1.65;
-          margin-bottom: 32px; max-width: 420px;
+          font-size: 16px; color: #4a5568; line-height: 1.7;
+          margin-bottom: 36px; max-width: 440px;
         }
-        .hero-actions { display: flex; gap: 12px; align-items: center; }
-        .btn-primary {
-          background: #8b5e52; color: #fff;
-          padding: 12px 24px; border-radius: 10px; border: none;
-          font-family: 'Barlow', sans-serif; font-size: 14px; font-weight: 600;
-          cursor: pointer; letter-spacing: 0.02em; transition: background 0.15s;
+        .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+        .btn-blue {
+          background: #1a5ce4; color: #fff;
+          padding: 13px 26px; border-radius: 10px; border: none;
+          font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600;
+          cursor: pointer; transition: background 0.15s;
         }
-        .btn-primary:hover { background: #6b3d30; }
-        .btn-secondary {
-          background: transparent; color: #2c1a14;
-          padding: 12px 24px; border-radius: 10px;
-          border: 1.5px solid #d4c4bc;
-          font-family: 'Barlow', sans-serif; font-size: 14px; font-weight: 500;
+        .btn-blue:hover { background: #1449c0; }
+        .btn-outline {
+          background: transparent; color: #0a1628;
+          padding: 13px 26px; border-radius: 10px;
+          border: 1.5px solid #d1dae8;
+          font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500;
           cursor: pointer; transition: all 0.15s;
         }
-        .btn-secondary:hover { border-color: #8b5e52; color: #8b5e52; }
+        .btn-outline:hover { border-color: #1a5ce4; color: #1a5ce4; }
 
-        .hero-card {
+        .hero-visual {
           background: #fff; border-radius: 20px;
-          border: 1px solid #e8ddd6; padding: 28px;
-          box-shadow: 0 4px 24px rgba(44,26,20,0.08);
+          border: 1px solid #e8edf5; padding: 28px;
+          box-shadow: 0 8px 40px rgba(26,92,228,0.08);
         }
-        .hero-card-header {
+        .lea-header {
           display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+          padding-bottom: 16px; border-bottom: 1px solid #f0f4fb;
         }
-        .avatar {
-          width: 44px; height: 44px; border-radius: 50%;
-          background: #f5ede6; display: flex; align-items: center;
-          justify-content: center; font-size: 20px; flex-shrink: 0;
+        .lea-avatar {
+          width: 40px; height: 40px; border-radius: 10px;
+          background: #1a5ce4; display: flex; align-items: center;
+          justify-content: center; font-size: 18px; color: #fff; font-weight: 700;
+          font-family: 'Playfair Display', serif;
         }
-        .status-dot {
-          width: 8px; height: 8px; border-radius: 50%; background: #4caf7d;
-          box-shadow: 0 0 0 3px rgba(76,175,125,0.2);
+        .online-pill {
+          display: flex; align-items: center; gap: 5px;
+          background: #f0faf4; border: 1px solid #c6f0d4;
+          border-radius: 20px; padding: 3px 10px;
+          font-size: 11px; font-weight: 600; color: #1a7f3c;
         }
-        .steps { display: flex; flex-direction: column; gap: 10px; }
-        .step {
-          display: flex; align-items: center; gap: 12px;
-          padding: 10px 14px; border-radius: 10px;
-          background: #faf7f3; border: 1px solid #f0e8e0;
-        }
-        .step-icon {
-          width: 28px; height: 28px; border-radius: 8px;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 12px; flex-shrink: 0;
-        }
-        .step-badge {
-          font-size: 10px; padding: 2px 8px; border-radius: 20px;
-          font-weight: 600; letter-spacing: 0.04em;
-        }
+        .online-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }
 
-        .stats {
-          background: #2c1a14; padding: 40px 48px;
-          display: grid; grid-template-columns: repeat(4, 1fr);
+        .dept-list { display: flex; flex-direction: column; gap: 8px; }
+        .dept-item {
+          display: flex; align-items: center; gap: 12px;
+          padding: 11px 14px; border-radius: 10px;
+          border: 1px solid #f0f4fb; background: #fafbff;
+          transition: all 0.15s; cursor: pointer;
         }
-        .stat { padding: 0 32px; text-align: center; border-right: 1px solid rgba(255,255,255,0.08); }
-        .stat:first-child { padding-left: 0; }
-        .stat:last-child { border-right: none; padding-right: 0; }
+        .dept-item:hover { border-color: #1a5ce4; background: #f0f5ff; }
+        .dept-dot {
+          width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+        }
+        .dept-name { font-size: 13px; font-weight: 500; color: #0a1628; flex: 1; }
+        .dept-avail { font-size: 11px; color: #1a5ce4; font-weight: 500; }
+
+        .stats-bar {
+          background: #0a1628; padding: 36px 56px;
+          display: grid; grid-template-columns: repeat(4,1fr);
+        }
+        .stat { text-align: center; padding: 0 24px; border-right: 1px solid rgba(255,255,255,0.08); }
+        .stat:last-child { border-right: none; }
         .stat-num {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 36px; font-weight: 700; color: #f5ede6;
-          margin-bottom: 4px;
+          font-family: 'Playfair Display', serif;
+          font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 4px;
         }
         .stat-label { font-size: 11px; color: rgba(255,255,255,0.4); letter-spacing: 0.06em; text-transform: uppercase; }
 
-        .services { padding: 80px 48px; max-width: 1100px; margin: 0 auto; }
-        .section-title {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 36px; font-weight: 700; color: #2c1a14;
-          margin-bottom: 48px; letter-spacing: -0.01em;
+        .services-section { padding: 80px 56px; max-width: 1200px; margin: 0 auto; }
+        .section-label {
+          font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+          text-transform: uppercase; color: #1a5ce4; margin-bottom: 12px;
         }
-        .services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-        .service-card {
+        h2 {
+          font-family: 'Playfair Display', serif;
+          font-size: 34px; font-weight: 700; color: #0a1628;
+          margin-bottom: 48px; letter-spacing: -0.02em;
+        }
+        .dept-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; }
+        .dept-card {
           background: #fff; border-radius: 16px;
-          border: 1px solid #e8ddd6; padding: 28px;
-          transition: box-shadow 0.2s, transform 0.2s;
+          border: 1px solid #e8edf5; padding: 28px;
+          transition: all 0.2s; cursor: pointer;
         }
-        .service-card:hover { box-shadow: 0 8px 24px rgba(44,26,20,0.1); transform: translateY(-2px); }
-        .service-icon {
+        .dept-card:hover {
+          border-color: #1a5ce4; box-shadow: 0 8px 24px rgba(26,92,228,0.1);
+          transform: translateY(-2px);
+        }
+        .dept-card-icon {
           width: 48px; height: 48px; border-radius: 12px;
-          background: #f5ede6; display: flex; align-items: center;
+          background: #f0f5ff; display: flex; align-items: center;
           justify-content: center; font-size: 22px; margin-bottom: 16px;
         }
-        .service-name { font-size: 16px; font-weight: 600; color: #2c1a14; margin-bottom: 8px; }
-        .service-desc { font-size: 13px; color: #9e8880; line-height: 1.6; }
+        .dept-card-name { font-size: 15px; font-weight: 600; color: #0a1628; margin-bottom: 6px; }
+        .dept-card-desc { font-size: 13px; color: #718096; line-height: 1.6; margin-bottom: 16px; }
+        .dept-card-link {
+          font-size: 13px; font-weight: 600; color: #1a5ce4;
+          display: flex; align-items: center; gap: 4px;
+        }
 
-        .cta-band {
-          background: #f5ede6; margin: 0 48px 80px;
-          border-radius: 20px; padding: 48px;
+        .lea-band {
+          background: #f0f5ff; margin: 0 56px 80px;
+          border-radius: 20px; padding: 48px 56px;
           display: flex; align-items: center; justify-content: space-between; gap: 32px;
+          border: 1px solid #d4e2fb;
         }
-        .cta-band-title {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 28px; font-weight: 700; color: #2c1a14; margin-bottom: 8px;
+        .lea-band-tag {
+          display: inline-flex; align-items: center; gap: 6px;
+          background: #1a5ce4; color: #fff;
+          font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+          padding: 4px 10px; border-radius: 20px; margin-bottom: 12px;
+          text-transform: uppercase;
         }
-        .cta-band-sub { font-size: 14px; color: #6b5a52; }
+        .lea-band-title {
+          font-family: 'Playfair Display', serif;
+          font-size: 26px; font-weight: 700; color: #0a1628; margin-bottom: 8px;
+        }
+        .lea-band-sub { font-size: 14px; color: #4a5568; }
 
         footer {
-          border-top: 1px solid #e8ddd6; padding: 32px 48px;
+          border-top: 1px solid #e8edf5; padding: 32px 56px;
           display: flex; align-items: center; justify-content: space-between;
         }
-        .footer-logo {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 16px; font-weight: 700; letter-spacing: 0.06em;
-          text-transform: uppercase; color: #2c1a14;
+        .footer-logo { font-size: 15px; font-weight: 700; color: #0a1628; }
+        .footer-links { display: flex; gap: 24px; }
+        .footer-links a { font-size: 13px; color: #718096; text-decoration: none; }
+        .footer-links a:hover { color: #1a5ce4; }
+
+        .launcher {
+          position: fixed; bottom: 28px; right: 28px; z-index: 100;
+          display: flex; align-items: center; gap: 10px;
+          background: #1a5ce4; border: none; cursor: pointer;
+          padding: 14px 20px; border-radius: 50px;
+          box-shadow: 0 4px 20px rgba(26,92,228,0.35);
+          transition: all 0.2s; color: #fff;
+          font-family: 'Inter', sans-serif;
+        }
+        .launcher:hover { background: #1449c0; transform: translateY(-2px); }
+        .launcher-text { font-size: 14px; font-weight: 600; }
+        .launcher-badge {
+          width: 18px; height: 18px; border-radius: 50%;
+          background: #ef4444; font-size: 10px; font-weight: 700;
+          display: flex; align-items: center; justify-content: center;
         }
 
-        /* Chat modal */
         .chat-overlay {
           position: fixed; inset: 0; z-index: 200;
-          background: rgba(44,26,20,0.4);
-          display: flex; align-items: center; justify-content: center;
-          padding: 20px;
+          background: rgba(10,22,40,0.5);
+          display: flex; align-items: center; justify-content: center; padding: 20px;
         }
         .chat-modal {
           background: #fff; border-radius: 20px; overflow: hidden;
           width: 100%; max-width: 480px; height: 700px;
           display: flex; flex-direction: column;
-          box-shadow: 0 24px 64px rgba(44,26,20,0.25);
+          box-shadow: 0 24px 64px rgba(10,22,40,0.25);
         }
-        .chat-modal-header {
-          background: #2c1a14; padding: 16px 20px;
-          display: flex; align-items: center; justify-content: space-between;
-          flex-shrink: 0;
+        .chat-header {
+          background: #0a1628; padding: 16px 20px;
+          display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
         }
-        .chat-modal-title {
-          font-family: 'Barlow Condensed', sans-serif;
-          font-size: 16px; font-weight: 700; color: #fff;
-          letter-spacing: 0.04em; text-transform: uppercase;
-          display: flex; align-items: center; gap: 8px;
+        .chat-header-left { display: flex; align-items: center; gap: 10px; }
+        .chat-avatar {
+          width: 32px; height: 32px; border-radius: 8px;
+          background: #1a5ce4; display: flex; align-items: center;
+          justify-content: center; font-size: 14px; font-weight: 700;
+          color: #fff; font-family: 'Playfair Display', serif;
         }
-        .online-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf7d; }
-        .chat-close-btn {
+        .chat-title { font-size: 15px; font-weight: 600; color: #fff; }
+        .chat-subtitle { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 1px; }
+        .chat-close {
           background: none; border: none; color: rgba(255,255,255,0.5);
           cursor: pointer; font-size: 20px; line-height: 1; padding: 2px;
           transition: color 0.15s;
         }
-        .chat-close-btn:hover { color: #fff; }
-
-        /* Chat launcher */
-        .launcher {
-          position: fixed; bottom: 28px; right: 28px; z-index: 100;
-          width: 56px; height: 56px; border-radius: 50%;
-          background: #8b5e52; border: none; cursor: pointer;
-          display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 4px 16px rgba(139,94,82,0.4);
-          transition: background 0.15s, transform 0.2s;
-        }
-        .launcher:hover { background: #6b3d30; transform: scale(1.05); }
-        .notif-dot {
-          position: absolute; top: -2px; right: -2px;
-          width: 16px; height: 16px; border-radius: 50%;
-          background: #e53e3e; border: 2px solid #faf8f5;
-          font-size: 9px; color: #fff; font-weight: 700;
-          display: flex; align-items: center; justify-content: center;
-        }
+        .chat-close:hover { color: #fff; }
 
         @media (max-width: 768px) {
           .hero { grid-template-columns: 1fr; padding: 40px 24px; gap: 32px; }
-          .services-grid { grid-template-columns: 1fr; }
-          .stats { grid-template-columns: repeat(2, 1fr); gap: 20px; padding: 32px 24px; }
-          .stat { border-right: none; padding: 0; }
-          .cta-band { flex-direction: column; margin: 0 24px 48px; }
+          .dept-grid { grid-template-columns: 1fr; }
+          .stats-bar { grid-template-columns: repeat(2,1fr); gap: 20px; padding: 32px 24px; }
+          .stat { border-right: none; }
           nav { padding: 0 24px; }
           .nav-links a:not(.nav-cta) { display: none; }
-          .services { padding: 48px 24px; }
-          footer { padding: 24px; flex-direction: column; gap: 8px; text-align: center; }
+          .services-section { padding: 48px 24px; }
+          .lea-band { flex-direction: column; margin: 0 24px 48px; padding: 32px 28px; }
+          footer { padding: 24px; flex-direction: column; gap: 16px; text-align: center; }
+          .launcher-text { display: none; }
+          .launcher { padding: 14px; border-radius: 50%; }
         }
       `}</style>
 
       {/* Nav */}
       <nav>
         <a href="/" className="nav-logo">
-          <svg width="22" height="26" viewBox="0 0 28 32" fill="none">
-            <path d="M14 2L14 18M14 18L6 26M14 18L22 26M14 26L14 30M10 30L18 30" stroke="#8b5e52" strokeWidth="2" strokeLinecap="round"/>
-            <circle cx="14" cy="6" r="3" fill="#8b5e52"/>
-          </svg>
-          Ledelsea Health
+          <div className="nav-logo-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M12 2L12 22M2 12L22 12" />
+            </svg>
+          </div>
+          Lea Medical Center
         </a>
         <div className="nav-links">
-          <a href="#">Services</a>
+          <a href="/departments">Departments</a>
           <a href="#">Providers</a>
           <a href="#">Locations</a>
           <a href="/portal">Patient portal</a>
@@ -256,53 +285,64 @@ export default function HomePage() {
       </nav>
 
       {/* Hero */}
-      <section className="hero">
-        <div>
-          <div className="eyebrow">AI-powered patient intake</div>
-          <h1>Healthcare that <span>fits your life</span></h1>
-          <p className="hero-sub">
-            From first appointment to follow-up care, Ledelsea Health makes every step simple —
-            with AI-assisted intake, real-time insurance verification, and seamless scheduling.
-          </p>
-          <div className="hero-actions">
-            <button className="btn-primary" onClick={() => setChatOpen(true)}>Start intake now</button>
-            <button className="btn-secondary" onClick={() => router.push('/portal')}>View portal</button>
-          </div>
-        </div>
-
-        <div className="hero-card">
-          <div className="hero-card-header">
-            <div className="avatar">👤</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#2c1a14' }}>Patient Intake</div>
-              <div style={{ fontSize: 12, color: '#9e8880', marginTop: 2 }}>Powered by Ledelsea AI</div>
+      <div style={{ background: 'linear-gradient(160deg, #f0f5ff 0%, #ffffff 55%)' }}>
+        <section className="hero">
+          <div>
+            <div className="hero-tag">
+              <div className="hero-tag-dot" />
+              Lea Health AI — Now available
             </div>
-            <div className="status-dot" />
+            <h1>Advanced care,<br /><em>closer to you</em></h1>
+            <p className="hero-sub">
+              Lea Medical Center combines world-class specialists with AI-powered intake through Lea Health —
+              so you spend less time on paperwork and more time getting better.
+            </p>
+            <div className="hero-actions">
+              <button className="btn-blue" onClick={() => setChatOpen(true)}>Book with Lea Health</button>
+              <button className="btn-outline" onClick={() => router.push('/departments')}>View departments</button>
+            </div>
           </div>
-          <div className="steps">
-            {[
-              { label: 'Identity verified', badge: 'Done', badgeBg: 'rgba(139,94,82,0.12)', badgeColor: '#8b5e52', iconBg: '#f5ede6', icon: '✓' },
-              { label: 'Insurance confirmed', badge: 'Done', badgeBg: 'rgba(139,94,82,0.12)', badgeColor: '#8b5e52', iconBg: '#f5ede6', icon: '✓' },
-              { label: 'Scheduling appointment', badge: 'Active', badgeBg: '#8b5e52', badgeColor: '#fff', iconBg: '#8b5e52', icon: '⋯', stepBg: '#f5ede6', stepBorder: '#d4c4bc' },
-              { label: 'Consent and payment', badge: 'Pending', badgeBg: 'transparent', badgeColor: '#c4b4ac', iconBg: '#f0e8e0', icon: '○', opacity: 0.5 },
-            ].map((s, i) => (
-              <div key={i} className="step" style={{ background: s.stepBg, borderColor: s.stepBorder, opacity: s.opacity }}>
-                <div className="step-icon" style={{ background: s.iconBg, color: s.iconBg === '#8b5e52' ? '#fff' : '#8b5e52', fontSize: 13 }}>{s.icon}</div>
-                <span style={{ fontSize: 13, fontWeight: 500, color: '#2c1a14', flex: 1 }}>{s.label}</span>
-                <span className="step-badge" style={{ background: s.badgeBg, color: s.badgeColor }}>{s.badge}</span>
+
+          <div className="hero-visual">
+            <div className="lea-header">
+              <div className="lea-avatar">L</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#0a1628' }}>Lea Health</div>
+                <div style={{ fontSize: 12, color: '#718096', marginTop: 1 }}>AI patient intake by Lea Medical</div>
               </div>
-            ))}
+              <div className="online-pill">
+                <div className="online-dot" />
+                Online
+              </div>
+            </div>
+            <div className="dept-list">
+              {[
+                { name: 'Family Medicine', avail: '3 slots today', color: '#22c55e' },
+                { name: 'Cardiology', avail: '1 slot today', color: '#f59e0b' },
+                { name: 'Mental Health', avail: '5 slots today', color: '#22c55e' },
+                { name: 'Pediatrics', avail: '2 slots today', color: '#22c55e' },
+              ].map((d, i) => (
+                <div key={i} className="dept-item" onClick={() => setChatOpen(true)}>
+                  <div className="dept-dot" style={{ background: d.color }} />
+                  <span className="dept-name">{d.name}</span>
+                  <span className="dept-avail">{d.avail}</span>
+                </div>
+              ))}
+              <button className="btn-blue" style={{ width: '100%', marginTop: 4, padding: '11px' }} onClick={() => setChatOpen(true)}>
+                Start intake with Lea →
+              </button>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
       {/* Stats */}
-      <div className="stats">
+      <div className="stats-bar">
         {[
           { num: '55,000+', label: 'Patients served' },
           { num: '< 90s',   label: 'Avg intake time' },
           { num: '12',      label: 'Departments' },
-          { num: 'HIPAA',   label: 'Compliant' },
+          { num: 'HIPAA',   label: 'Certified' },
         ].map((s, i) => (
           <div key={i} className="stat">
             <div className="stat-num">{s.num}</div>
@@ -311,69 +351,77 @@ export default function HomePage() {
         ))}
       </div>
 
-      {/* Services */}
-      <section className="services">
-        <div className="eyebrow">What we offer</div>
-        <h2 className="section-title">Comprehensive care, simplified</h2>
-        <div className="services-grid">
+      {/* Departments */}
+      <section className="services-section">
+        <div className="section-label">Our specialties</div>
+        <h2>World-class care in every department</h2>
+        <div className="dept-grid">
           {[
-            { icon: '🏥', name: 'Family Medicine',  desc: 'Primary care for every stage of life. Annual checkups, chronic disease management, and preventive care.' },
+            { icon: '🏥', name: 'Family Medicine',  desc: 'Primary care for every stage of life — checkups, chronic disease management, and preventive care.' },
             { icon: '❤️', name: 'Cardiology',       desc: 'Heart health monitoring, echocardiograms, and preventive cardiovascular care by board-certified specialists.' },
             { icon: '🧠', name: 'Mental Health',    desc: 'Therapy, psychiatry, and crisis support. Confidential, compassionate care for your wellbeing.' },
             { icon: '🚑', name: 'Urgent Care',      desc: 'Walk-in care for non-life-threatening conditions. Fast treatment, no appointment needed.' },
-            { icon: '👶', name: 'Pediatrics',       desc: 'Specialized care for infants, children, and adolescents. Vaccinations, growth tracking, and more.' },
+            { icon: '👶', name: 'Pediatrics',       desc: 'Specialized care for children and adolescents — vaccinations, growth tracking, and more.' },
             { icon: '🔬', name: 'Dermatology',      desc: 'Skin health, acne treatment, mole checks, and cosmetic procedures by certified dermatologists.' },
-          ].map((s, i) => (
-            <div key={i} className="service-card" onClick={() => setChatOpen(true)} style={{ cursor: 'pointer' }}>
-              <div className="service-icon">{s.icon}</div>
-              <div className="service-name">{s.name}</div>
-              <div className="service-desc">{s.desc}</div>
+          ].map((d, i) => (
+            <div key={i} className="dept-card" onClick={() => setChatOpen(true)}>
+              <div className="dept-card-icon">{d.icon}</div>
+              <div className="dept-card-name">{d.name}</div>
+              <div className="dept-card-desc">{d.desc}</div>
+              <div className="dept-card-link">Book with Lea Health →</div>
             </div>
           ))}
         </div>
       </section>
 
-      {/* CTA band */}
-      <div className="cta-band">
+      {/* Lea Health band */}
+      <div className="lea-band">
         <div>
-          <div className="cta-band-title">Ready to book your appointment?</div>
-          <div className="cta-band-sub">Our AI intake takes under 90 seconds. Insurance verified instantly.</div>
+          <div className="lea-band-tag">Powered by Lea Health AI</div>
+          <div className="lea-band-title">Book your appointment in under 90 seconds</div>
+          <div className="lea-band-sub">Insurance verified instantly. No phone calls. No paperwork. Just care.</div>
         </div>
-        <button className="btn-primary" style={{ padding: '14px 28px', flexShrink: 0 }} onClick={() => setChatOpen(true)}>
-          Start intake →
+        <button className="btn-blue" style={{ padding: '14px 32px', flexShrink: 0, fontSize: 15 }} onClick={() => setChatOpen(true)}>
+          Start now →
         </button>
       </div>
 
       {/* Footer */}
       <footer>
-        <div className="footer-logo">Ledelsea Health</div>
-        <div style={{ fontSize: 12, color: '#c4b4ac' }}>HIPAA compliant · NIST IAL2 · © 2026 Ledelsea</div>
+        <div className="footer-logo">Lea Medical Center</div>
+        <div className="footer-links">
+          <a href="/departments">Departments</a>
+          <a href="/portal">Patient portal</a>
+          <a href="#">Privacy</a>
+          <a href="#">Contact</a>
+        </div>
+        <div style={{ fontSize: 12, color: '#a0aec0' }}>HIPAA compliant · © 2026 Lea Medical Center</div>
       </footer>
 
-      {/* Chat launcher */}
-      <button className="launcher" onClick={() => setChatOpen(true)} style={{ position: 'fixed' }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* Launcher */}
+      <button className="launcher" onClick={() => setChatOpen(true)}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
-        <div className="notif-dot">1</div>
+        <span className="launcher-text">Talk to Lea Health</span>
+        <div className="launcher-badge">1</div>
       </button>
 
       {/* Chat modal */}
       {chatOpen && (
         <div className="chat-overlay" onClick={e => { if (e.target === e.currentTarget) setChatOpen(false) }}>
           <div className="chat-modal">
-            <div className="chat-modal-header">
-              <div className="chat-modal-title">
-                <div className="online-dot" />
-                Patient Intake
+            <div className="chat-header">
+              <div className="chat-header-left">
+                <div className="chat-avatar">L</div>
+                <div>
+                  <div className="chat-title">Lea Health</div>
+                  <div className="chat-subtitle">AI patient intake · Lea Medical Center</div>
+                </div>
               </div>
-              <button className="chat-close-btn" onClick={() => setChatOpen(false)}>✕</button>
+              <button className="chat-close" onClick={() => setChatOpen(false)}>✕</button>
             </div>
-            <iframe
-              src="/intake"
-              style={{ flex: 1, border: 'none', width: '100%' }}
-              title="Patient Intake"
-            />
+            <iframe src="/intake" style={{ flex: 1, border: 'none', width: '100%' }} title="Lea Health Intake" />
           </div>
         </div>
       )}
