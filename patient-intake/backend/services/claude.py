@@ -17,6 +17,7 @@ import asyncio
 import pathlib
 import redis
 import httpx
+from datetime import date
 from anthropic import Anthropic
 from config import settings
 from services.mcp_client import call_tool
@@ -38,6 +39,15 @@ MCP_SERVERS = [
 ]
 
 TOOLS = [
+    {
+        "name": "get_current_date",
+        "description": "Get today's date and current year. Call this immediately after collecting a patient's date of birth to accurately calculate their age.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
     {
         "name": "lookup_patient",
         "description": "Look up a patient by name + DOB. Returns record or NOT_FOUND.",
@@ -140,22 +150,24 @@ NEW patient:
   Then go to MINOR CHECK.
 
 MINOR CHECK (run immediately after DOB is collected, before asking for phone or email):
-  Calculate the patient's age from their DOB.
-  If age < 18:
-    Say: "I see this appointment is for a minor. We'll need a parent or guardian to complete the registration."
-    Then collect one at a time:
-    - "What is your full name?" (guardian name)
-    - "What is your relationship to [patient name]?"
-  Accept answers like: mother, father, parent, grandparent, legal guardian, stepparent.
-  The guardian is describing their relationship TO the child, not the child's relationship to them.
-    Say: "Thank you, [guardian name]. I'll note that you are booking on behalf of [patient name]."
-    Store guardian_name and guardian_relationship.
-    Then continue collecting phone and email as normal in STEP 2 — these will be the guardian's contact details.
-    Then go to STEP 4 — INSURANCE. Do not skip insurance for minor patients.
-  If age >= 18: continue collecting phone and email normally.
+  BEFORE calculating age, call `get_current_date` to get today's exact date.
+  Then calculate age precisely:
+    - age = current_year - birth_year
+    - if current month < birth month OR (current month == birth month AND current day < birth day): subtract 1
+  Examples using today's real date:
+    - Born 2000-08-10, today is 2026-07-13 → age 25 → NOT a minor
+    - Born 2009-03-15, today is 2026-07-13 → age 17 → IS a minor
+    - Born 2008-09-01, today is 2026-07-13 → age 17 → IS a minor
+  NEVER guess the year. ALWAYS call get_current_date first.
+  If age >= 18: continue normally. Do NOT mention their age.
+  If age < 18: ask for guardian name and relationship.
 
 STEP 3 — CONFIRM DETAILS
-RETURNING: confirm phone showing ONLY last 4 digits — say "ending in XXXX". Never show full phone number.
+RETURNING: confirm phone showing ONLY last 4 digits.
+  ALWAYS format it as: "We have a phone number ending in XXXX on file — is that still correct?"
+  Replace XXXX with the actual last 4 digits of their phone number from the record.
+  NEVER say "is this your correct number?" without the last 4 digits.
+  NEVER skip showing the last 4 digits.
   Show email ALWAYS masked — first 3 characters then ****@domain. Example: chr****@example.com. Never show full email.
   Update if changed.
 NEW: skip to STEP 4.
@@ -204,6 +216,59 @@ After any completion or redirect, if the patient says anything else reply with:
 {"status": "ended"}
 """
 
+REFLECTION_PROMPT = """You are a quality checker for a medical intake AI.
+Review the DRAFT RESPONSE and check ONLY these rules:
+
+1. PHONE: If confirming phone number, must show last 4 digits as "ending in XXXX". If missing → CORRECT it.
+2. AGE: If mentioning patient age or asking for guardian, verify age was calculated correctly using the DOB. If wrong → CORRECT it.
+3. SESSION: After intake is fully complete and patient says thanks/bye, output {"status": "ended"}. If still chatting → CORRECT it.
+4. EMAIL: Must always be masked as first3****@domain. If unmasked → CORRECT it.
+5. INSURANCE: Never show member ID. If shown → CORRECT it.
+
+Output ONLY:
+APPROVED
+or
+CORRECTED: [corrected text]"""
+
+
+def _is_risky_step(draft: str, history: list) -> bool:
+    """Only reflect on messages that touch high-risk rules."""
+    draft_lower = draft.lower()
+    risky_keywords = [
+        "phone", "number", "ending in",
+        "minor", "guardian", "years old", "age",
+        "ended", "all set", "see you soon",
+        "member id", "insurance id",
+        "@",
+    ]
+    return any(kw in draft_lower for kw in risky_keywords)
+
+
+async def _reflect(draft: str, history: list) -> str:
+    """Run reflection only on high-risk responses."""
+    if not _is_risky_step(draft, history):
+        return draft
+    try:
+        last_few = history[-4:] if len(history) >= 4 else history
+        reflection_response = anthropic_client.messages.create(
+            model=MODEL,
+            max_tokens=300,
+            system=REFLECTION_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": f"HISTORY:\n{json.dumps(last_few, indent=2)}\n\nDRAFT:\n{draft}"
+            }]
+        )
+        result = reflection_response.content[0].text.strip()
+        if result.startswith("CORRECTED:"):
+            corrected = result[len("CORRECTED:"):].strip()
+            print(f"[reflect] ✓ Correction: {corrected[:80]}...")
+            return corrected
+        return draft
+    except Exception as e:
+        print(f"[reflect] Failed: {e}")
+        return draft
+
 
 async def _send_crisis_alert(
     session_id: str,
@@ -214,7 +279,6 @@ async def _send_crisis_alert(
     patient_name    = "unknown"
     patient_address = "unknown"
 
-    # Extract patient info from Redis
     try:
         collected_json = redis_client.get(f"session:{session_id}:collected")
         if collected_json:
@@ -238,7 +302,6 @@ async def _send_crisis_alert(
     except Exception as e:
         print(f"[crisis] Could not extract patient info: {e}")
 
-    # Always log to Railway deploy logs
     print(f"")
     print(f"[crisis] {'='*55}")
     print(f"[crisis] ⚠️  CRISIS ALERT DETECTED")
@@ -252,37 +315,6 @@ async def _send_crisis_alert(
     print(f"[crisis] {'='*55}")
     print(f"")
 
-    # Try local notifier (works in local dev, not on Railway)
-    payload = {
-        "type":            alert_type,
-        "session_id":      session_id,
-        "patient_name":    patient_name,
-        "patient_address": patient_address,
-        "client_ip":       client_ip,
-        "reason":          reason if isinstance(reason, str) else str(reason),
-    }
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(f"{CRISIS_NOTIFIER_URL}/alert", json=payload)
-            print(f"[crisis] Notifier server reached — alert forwarded")
-    except Exception:
-        print(f"[crisis] Notifier server not running — alert logged above")
-
-    # ── Always log to Railway deploy logs ───────────────────────────────
-    print(f"")
-    print(f"[crisis] {'='*55}")
-    print(f"[crisis] ⚠️  CRISIS ALERT DETECTED")
-    print(f"[crisis] {'='*55}")
-    print(f"[crisis] Type:      {alert_type}")
-    print(f"[crisis] Patient:   {patient_name}")
-    print(f"[crisis] Address:   {patient_address}")
-    print(f"[crisis] IP:        {client_ip}")
-    print(f"[crisis] Session:   {session_id}")
-    print(f"[crisis] Reason:    {reason if isinstance(reason, str) else str(reason)}")
-    print(f"[crisis] {'='*55}")
-    print(f"")
-
-    # ── Try local notifier (works in local dev, not on Railway) ─────────
     payload = {
         "type":            alert_type,
         "session_id":      session_id,
@@ -325,6 +357,8 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
             assistant_text = "".join(
                 b.text for b in response.content if b.type == "text"
             ).strip()
+            # Reflection pass — catch rule violations before sending to patient
+            assistant_text = await _reflect(assistant_text, history)
             history.append({"role": "assistant", "content": assistant_text})
             break
 
@@ -338,7 +372,16 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            if block.name == "lookup_patient" and lookup_count > MAX_LOOKUP_RETRIES:
+            if block.name == "get_current_date":
+                today = date.today()
+                content = json.dumps({
+                    "today": today.isoformat(),
+                    "year":  today.year,
+                    "month": today.month,
+                    "day":   today.day,
+                })
+                print(f"[intake] get_current_date → {today.isoformat()}")
+            elif block.name == "lookup_patient" and lookup_count > MAX_LOOKUP_RETRIES:
                 content = "MAX_RETRIES_EXCEEDED — tell the patient a staff member will assist them."
             else:
                 content = await call_tool(block.name, block.input)
@@ -356,7 +399,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
 
     crisis_keywords = ["988", "suicide", "crisis lifeline", "911", "immediate danger", "emergency_redirect"]
     is_emergency = '{"status": "emergency_redirect"}' in assistant_text or \
-                any(kw in assistant_text.lower() for kw in crisis_keywords)
+                   any(kw in assistant_text.lower() for kw in crisis_keywords)
 
     if is_emergency:
         friendly = assistant_text
