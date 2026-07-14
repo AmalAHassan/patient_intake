@@ -62,13 +62,15 @@ TOOLS = [
             "required": ["insurance_id", "payer"],
         },
     },
-    {
+{
         "name": "fhir_get_slots",
-        "description": "Get available appointment slots for a department.",
+        "description": "Get available appointment slots for a department. Optionally filter by preferred day or time.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "department": {"type": "string"},
+                "day":        {"type": "string", "description": "Preferred day e.g. 'monday', 'tuesday'"},
+                "after_time": {"type": "string", "description": "Preferred time e.g. 'afternoon', 'after 2pm', 'morning'"},
             },
             "required": ["department"],
         },
@@ -185,7 +187,25 @@ Use their answer to run the EMERGENCY CHECK before proceeding to scheduling.
 
 STEP 7 — SCHEDULING
 Call `fhir_get_slots` with the chosen department.
-Present slots numbered, one per line. Wait for patient to pick a number.
+
+If slots are returned:
+  Present up to 5 slots numbered, one per line. Wait for patient to pick a number.
+  After presenting slots, ask: "Or would you prefer a specific day or time?"
+  - If patient says a day (e.g. "Wednesday", "Thursday") → call fhir_get_slots again with day parameter
+  - If patient says a time preference (e.g. "afternoon", "after 2pm", "morning") → call fhir_get_slots again with after_time parameter
+  - If patient says both → call with both parameters
+
+If no slots match the filter:
+  Say: "I don't see any [department] slots on [day/time] right now."
+  Then offer two options:
+  1. "Would you like to see all available slots instead?"
+  2. "Or try a different day?"
+  Wait for their response and act accordingly.
+
+If the patient asks for a completely different day and nothing is available:
+  Say: "It looks like we don't have anything available that day. Here are our next available slots:" then show all slots for that department.
+
+Always confirm the final slot choice by repeating: "Got it — [doctor] on [date] at [time]. Shall I book that?"
 
 STEP 8 — SAVE AND COMPLETE
 Call `fhir_create_patient` with all collected fields including guardian_name and guardian_relationship if applicable.

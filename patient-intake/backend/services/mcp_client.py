@@ -91,23 +91,51 @@ async def _fallback(tool_name: str, tool_input: dict) -> str:
     from services.patient_lookup import search_patient as find_patient
     from services.fhir_client import create_patient
 
-    SLOTS = [
-        {"id": "s1",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Mon Jun 9",  "time": "9:00 AM"},
-        {"id": "s2",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Mon Jun 9",  "time": "11:30 AM"},
-        {"id": "s3",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": "Tue Jun 10", "time": "1:00 PM"},
-        {"id": "s4",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": "Tue Jun 10", "time": "8:30 AM"},
-        {"id": "s5",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": "Wed Jun 11", "time": "10:00 AM"},
-        {"id": "s6",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": "Mon Jun 9",  "time": "2:00 PM"},
-        {"id": "s7",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": "Thu Jun 12", "time": "9:30 AM"},
-        {"id": "s8",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": "Wed Jun 11", "time": "3:00 PM"},
-        {"id": "s9",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": "Fri Jun 13", "time": "8:00 AM"},
-        {"id": "s10", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": "Mon Jun 9",  "time": "10:00 AM"},
-        {"id": "s11", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": "Mon Jun 9",  "time": "3:30 PM"},
-        {"id": "s12", "doctor": "Dr. Santos", "specialty": "Mental Health",   "date": "Thu Jun 12", "time": "11:00 AM"},
-        {"id": "s13", "doctor": "Dr. Adams",  "specialty": "Dermatology",     "date": "Fri Jun 13", "time": "9:00 AM"},
-        {"id": "s14", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": "Tue Jun 10", "time": "2:30 PM"},
-        {"id": "s15", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": "Wed Jun 11", "time": "8:00 AM"},
+from datetime import date, timedelta
+
+from datetime import date, timedelta
+import random
+
+def _get_slots():
+    """Generate slots dynamically for the next 10 weekdays."""
+    today = date.today()
+    weekdays = []
+    d = today + timedelta(days=1)
+    while len(weekdays) < 10:
+        if d.weekday() < 5:
+            weekdays.append(d)
+        d += timedelta(days=1)
+
+    day_names  = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    months     = ["Jan","Feb","Mar","Apr","May","Jun",
+                  "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+    def fmt(d):
+        return f"{day_names[d.weekday()]} {months[d.month-1]} {d.day}"
+
+    slots = [
+        {"id": "s1",  "doctor": "Dr. Patel",   "specialty": "Family Medicine", "date": fmt(weekdays[0]), "time": "9:00 AM",  "day": weekdays[0].strftime("%A").lower()},
+        {"id": "s2",  "doctor": "Dr. Patel",   "specialty": "Family Medicine", "date": fmt(weekdays[0]), "time": "11:30 AM", "day": weekdays[0].strftime("%A").lower()},
+        {"id": "s3",  "doctor": "Dr. Patel",   "specialty": "Family Medicine", "date": fmt(weekdays[2]), "time": "1:00 PM",  "day": weekdays[2].strftime("%A").lower()},
+        {"id": "s4",  "doctor": "Dr. Chen",    "specialty": "Family Medicine", "date": fmt(weekdays[3]), "time": "8:30 AM",  "day": weekdays[3].strftime("%A").lower()},
+        {"id": "s5",  "doctor": "Dr. Chen",    "specialty": "Family Medicine", "date": fmt(weekdays[4]), "time": "10:00 AM", "day": weekdays[4].strftime("%A").lower()},
+        {"id": "s6",  "doctor": "Dr. Okafor",  "specialty": "OB/GYN",          "date": fmt(weekdays[0]), "time": "2:00 PM",  "day": weekdays[0].strftime("%A").lower()},
+        {"id": "s7",  "doctor": "Dr. Okafor",  "specialty": "OB/GYN",          "date": fmt(weekdays[3]), "time": "9:30 AM",  "day": weekdays[3].strftime("%A").lower()},
+        {"id": "s8",  "doctor": "Dr. Kim",     "specialty": "Cardiology",      "date": fmt(weekdays[1]), "time": "3:00 PM",  "day": weekdays[1].strftime("%A").lower()},
+        {"id": "s9",  "doctor": "Dr. Kim",     "specialty": "Cardiology",      "date": fmt(weekdays[4]), "time": "8:00 AM",  "day": weekdays[4].strftime("%A").lower()},
+        {"id": "s10", "doctor": "Dr. Rivera",  "specialty": "Urgent Care",     "date": fmt(weekdays[0]), "time": "10:00 AM", "day": weekdays[0].strftime("%A").lower()},
+        {"id": "s11", "doctor": "Dr. Rivera",  "specialty": "Urgent Care",     "date": fmt(weekdays[1]), "time": "3:30 PM",  "day": weekdays[1].strftime("%A").lower()},
+        {"id": "s12", "doctor": "Dr. Santos",  "specialty": "Mental Health",   "date": fmt(weekdays[2]), "time": "11:00 AM", "day": weekdays[2].strftime("%A").lower()},
+        {"id": "s13", "doctor": "Dr. Santos",  "specialty": "Mental Health",   "date": fmt(weekdays[5]), "time": "2:00 PM",  "day": weekdays[5].strftime("%A").lower()},
+        {"id": "s14", "doctor": "Dr. Adams",   "specialty": "Dermatology",     "date": fmt(weekdays[3]), "time": "9:00 AM",  "day": weekdays[3].strftime("%A").lower()},
+        {"id": "s15", "doctor": "Dr. Wong",    "specialty": "Pediatrics",      "date": fmt(weekdays[1]), "time": "2:30 PM",  "day": weekdays[1].strftime("%A").lower()},
+        {"id": "s16", "doctor": "Dr. Wong",    "specialty": "Pediatrics",      "date": fmt(weekdays[4]), "time": "8:00 AM",  "day": weekdays[4].strftime("%A").lower()},
+        {"id": "s17", "doctor": "Dr. Patel",   "specialty": "Family Medicine", "date": fmt(weekdays[6]), "time": "9:00 AM",  "day": weekdays[6].strftime("%A").lower()},
+        {"id": "s18", "doctor": "Dr. Chen",    "specialty": "Family Medicine", "date": fmt(weekdays[7]), "time": "11:00 AM", "day": weekdays[7].strftime("%A").lower()},
+        {"id": "s19", "doctor": "Dr. Kim",     "specialty": "Cardiology",      "date": fmt(weekdays[8]), "time": "10:00 AM", "day": weekdays[8].strftime("%A").lower()},
+        {"id": "s20", "doctor": "Dr. Santos",  "specialty": "Mental Health",   "date": fmt(weekdays[9]), "time": "3:00 PM",  "day": weekdays[9].strftime("%A").lower()},
     ]
+    return slots
 
     def check_eligibility_mock(insurance_id: str, payer: str) -> dict:
         if not insurance_id or insurance_id == "NONE":
@@ -134,11 +162,61 @@ async def _fallback(tool_name: str, tool_input: dict) -> str:
                 payer=tool_input.get("payer", ""),
             )
             return json.dumps(result)
-
         if tool_name == "fhir_get_slots":
-            dept = tool_input.get("department", "").lower()
-            matched = [s for s in SLOTS if dept in s["specialty"].lower()]
-            return json.dumps(matched if matched else SLOTS[:3])
+    dept        = tool_input.get("department", "").lower()
+    filter_day  = tool_input.get("day", "").lower().strip()
+    filter_time = tool_input.get("after_time", "").lower().strip()
+    slots       = _get_slots()
+
+    # Filter by department
+    matched = [s for s in slots if dept in s["specialty"].lower()]
+    if not matched:
+        matched = slots[:3]
+
+    # Filter by day if requested
+    if filter_day:
+        day_filtered = [s for s in matched if filter_day in s["day"]]
+        if day_filtered:
+            matched = day_filtered
+        else:
+            return json.dumps({
+                "slots": [],
+                "message": f"No slots available on {filter_day.capitalize()} for {dept}.",
+                "available_days": list(set(s["day"].capitalize() for s in matched))
+            })
+
+    # Filter by time if requested (after a certain hour)
+        if filter_time:
+            try:
+                # Parse "after 2pm" or "afternoon" etc.
+                if "afternoon" in filter_time or "pm" in filter_time:
+                    hour_cutoff = 12
+                    if "2" in filter_time: hour_cutoff = 14
+                    elif "3" in filter_time: hour_cutoff = 15
+                    elif "4" in filter_time: hour_cutoff = 16
+                elif "morning" in filter_time or "am" in filter_time:
+                    hour_cutoff = 0
+                else:
+                    hour_cutoff = 0
+
+                def slot_hour(t):
+                    h = int(t.split(":")[0])
+                    if "PM" in t and h != 12: h += 12
+                    return h
+
+                time_filtered = [s for s in matched if slot_hour(s["time"]) >= hour_cutoff]
+                if time_filtered:
+                    matched = time_filtered
+                else:
+                    return json.dumps({
+                        "slots": [],
+                        "message": f"No slots after {filter_time} for {dept}.",
+                        "available_times": [s["time"] for s in matched[:5]]
+                    })
+            except Exception:
+                pass
+
+        return json.dumps({"slots": matched, "message": "available"})
 
         if tool_name == "fhir_create_patient":
             fhir_id = create_patient(tool_input)
