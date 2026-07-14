@@ -1,19 +1,8 @@
 """
 claude.py — Conversational intake loop.
-
-SYSTEM_PROMPT = conversation flow only (steps 1-8, JSON format, validation)
-AGENT_GUIDELINES.md = clinical rules, emergency handling, behavior rules
-
-Tool calls route through mcp_client.py → local MCP servers.
-
-To switch to remote MCP (ngrok or deployed):
-  1. Update MCP_SERVERS list below with public URLs
-  2. Swap messages.create() to beta.messages.create(mcp_servers=MCP_SERVERS)
-  3. Remove tools=TOOLS and the tool execution loop
 """
 import json
 import os
-import asyncio
 import pathlib
 import redis
 import httpx
@@ -216,28 +205,32 @@ After any completion or redirect, if the patient says anything else reply with:
 {"status": "ended"}
 """
 
-REFLECTION_PROMPT = """You are a quality checker for a medical intake AI.
-Review the DRAFT RESPONSE and check ONLY these rules:
+REFLECTION_PROMPT = """You are a silent quality checker for a medical intake AI.
 
-1. PHONE: If confirming phone number, must show last 4 digits as "ending in XXXX". If missing → CORRECT it.
-2. AGE: If mentioning patient age or asking for guardian, verify age was calculated correctly using the DOB. If wrong → CORRECT it.
-3. SESSION: After intake is fully complete and patient says thanks/bye, output {"status": "ended"}. If still chatting → CORRECT it.
-4. EMAIL: Must always be masked as first3****@domain. If unmasked → CORRECT it.
-5. INSURANCE: Never show member ID. If shown → CORRECT it.
+Check the DRAFT RESPONSE against these rules:
+1. PHONE: If confirming phone, must show last 4 digits as "ending in XXXX".
+2. AGE: If asking for guardian, patient must actually be under 18.
+3. EMAIL: Must be masked as abc****@domain.com — never show full email.
+4. INSURANCE: Never show member ID.
 
-Output ONLY:
-APPROVED
-or
-CORRECTED: [corrected text]"""
+IMPORTANT: Do NOT flag or modify responses that contain JSON status codes
+like {"status": "complete"...} or {"status": "ended"} — these are system
+signals, not patient-facing text.
+
+If the draft passes all rules, output ONLY the word: APPROVED
+If something needs fixing, output ONLY the corrected message text with
+no explanation, no preamble, no reasoning. Just the fixed message."""
 
 
 def _is_risky_step(draft: str, history: list) -> bool:
     """Only reflect on messages that touch high-risk rules."""
+    # Never reflect on status JSON messages — they're handled by the backend
+    if '{"status":' in draft:
+        return False
     draft_lower = draft.lower()
     risky_keywords = [
         "phone", "number", "ending in",
         "minor", "guardian", "years old", "age",
-        "ended", "all set", "see you soon",
         "member id", "insurance id",
         "@",
     ]
@@ -245,7 +238,7 @@ def _is_risky_step(draft: str, history: list) -> bool:
 
 
 async def _reflect(draft: str, history: list) -> str:
-    """Run reflection only on high-risk responses."""
+    """Run reflection only on high-risk responses. Silent — never shows reasoning."""
     if not _is_risky_step(draft, history):
         return draft
     try:
@@ -260,11 +253,20 @@ async def _reflect(draft: str, history: list) -> str:
             }]
         )
         result = reflection_response.content[0].text.strip()
-        if result.startswith("CORRECTED:"):
-            corrected = result[len("CORRECTED:"):].strip()
-            print(f"[reflect] ✓ Correction: {corrected[:80]}...")
-            return corrected
-        return draft
+
+        # If approved, return original
+        if result.upper() == "APPROVED" or result.upper().startswith("APPROVED"):
+            return draft
+
+        # If meta-commentary leaked through, skip correction
+        bad_prefixes = ["issue", "rule", "corrected:", "wait,", "let me", "the draft", "approved\n", "note:"]
+        if any(result.lower().startswith(p) for p in bad_prefixes):
+            print(f"[reflect] Bad output format — skipping: {result[:60]}")
+            return draft
+
+        print(f"[reflect] ✓ Corrected silently")
+        return result
+
     except Exception as e:
         print(f"[reflect] Failed: {e}")
         return draft
@@ -357,7 +359,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
             assistant_text = "".join(
                 b.text for b in response.content if b.type == "text"
             ).strip()
-            # Reflection pass — catch rule violations before sending to patient
+            # Reflection pass — only runs on risky steps, silent to patient
             assistant_text = await _reflect(assistant_text, history)
             history.append({"role": "assistant", "content": assistant_text})
             break
