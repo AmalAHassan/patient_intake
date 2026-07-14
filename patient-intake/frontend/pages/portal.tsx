@@ -250,12 +250,24 @@ export default function PortalPage() {
           background: '#1a1916', padding: '16px 32px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <div style={{ fontFamily: "'Fraunces', serif", fontSize: 18, color: '#fff', fontWeight: 300 }}>
-            Patient <em style={{ color: '#9fb8ac', fontStyle: 'italic' }}>Portal</em>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <a href="/" style={{
+              color: 'rgba(255,255,255,0.4)', fontSize: 13, textDecoration: 'none',
+              transition: 'color 0.15s',
+            }}
+              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.4)')}
+            >
+              ← Lea Medical Center
+            </a>
+            <div style={{ color: 'rgba(255,255,255,0.15)', fontSize: 13 }}>|</div>
+            <div style={{ fontFamily: "'Fraunces', serif", fontSize: 18, color: '#fff', fontWeight: 300 }}>
+              Patient <em style={{ color: '#9fb8ac', fontStyle: 'italic' }}>Portal</em>
+            </div>
           </div>
           <div style={{ fontSize: 11, color: '#8a8880' }}>Ledelsea · Secure · HIPAA compliant</div>
         </div>
-
+        
         <div style={{ maxWidth: 600, margin: '0 auto', padding: '40px 24px' }}>
 
           {!loggedIn ? (
