@@ -276,7 +276,7 @@ export default function HomePage() {
       {/* Top bar */}
       <div className="top-bar">
         <div className="top-bar-left">
-          <span>📍 123 Medical Drive, Toronto, ON</span>
+          <span>📍 825 Nicollet Mall, Minneapolis, MN</span>
           <span>🕐 Mon–Fri: 8am–6pm · Sat: 9am–2pm</span>
         </div>
         <div className="top-bar-right">Emergency: 1-800-LEA-HELP</div>
@@ -322,20 +322,20 @@ export default function HomePage() {
         </div>
 
         <div className="hero-image">
-          {[
-            { initials: 'SP', name: 'Dr. Sarah Patel', role: 'Family Medicine · 14 yrs', color: '#1a5ce4' },
-            { initials: 'MK', name: 'Dr. Michael Kim', role: 'Cardiology · 20 yrs', color: '#0a3a99' },
-            { initials: 'PS', name: 'Dr. Priya Santos', role: 'Mental Health · 11 yrs', color: '#1a7f6e' },
-          ].map((d, i) => (
-            <div key={i} className="doctor-card">
-              <div className="doctor-avatar" style={{ background: d.color }}>{d.initials}</div>
-              <div className="doctor-info">
-                <div className="doctor-name">{d.name}</div>
-                <div className="doctor-role">{d.role}</div>
-              </div>
-              <div className="avail-badge">Available</div>
+        {[
+        { img: 'https://randomuser.me/api/portraits/women/44.jpg', name: 'Dr. Sarah Patel', role: 'Family Medicine · 14 yrs' },
+        { img: 'https://randomuser.me/api/portraits/men/32.jpg',   name: 'Dr. Michael Kim', role: 'Cardiology · 20 yrs' },
+        { img: 'https://randomuser.me/api/portraits/women/68.jpg', name: 'Dr. Priya Santos', role: 'Mental Health · 11 yrs' },
+        ].map((d, i) => (
+        <div key={i} className="doctor-card">
+            <img src={d.img} alt={d.name} style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+            <div className="doctor-info">
+            <div className="doctor-name">{d.name}</div>
+            <div className="doctor-role">{d.role}</div>
             </div>
-          ))}
+            <div className="avail-badge">Available</div>
+        </div>
+        ))}
           <div className="hero-stats">
             <div className="hero-stat"><div className="hero-stat-num">55K+</div><div className="hero-stat-label">Patients</div></div>
             <div className="hero-stat"><div className="hero-stat-num">12</div><div className="hero-stat-label">Departments</div></div>
@@ -391,13 +391,13 @@ export default function HomePage() {
           <h2 className="section-h2">Meet our physicians</h2>
           <div className="doctors-grid">
             {[
-              { initials: 'SP', name: 'Dr. Sarah Patel', specialty: 'Family Medicine', exp: '14 years experience', color: '#1a5ce4' },
-              { initials: 'MK', name: 'Dr. Michael Kim', specialty: 'Cardiology', exp: '20 years experience', color: '#0a3a99' },
-              { initials: 'PS', name: 'Dr. Priya Santos', specialty: 'Mental Health', exp: '11 years experience', color: '#1a7f6e' },
-              { initials: 'EW', name: 'Dr. Emily Wong', specialty: 'Pediatrics', exp: '9 years experience', color: '#7c3aed' },
+              { img: 'https://randomuser.me/api/portraits/women/44.jpg', name: 'Dr. Sarah Patel', specialty: 'Family Medicine', exp: '14 years experience' },
+              { img: 'https://randomuser.me/api/portraits/men/32.jpg', name: 'Dr. Michael Kim', specialty: 'Cardiology', exp: '20 years experience' },
+              { img: 'https://randomuser.me/api/portraits/women/68.jpg', name: 'Dr. Priya Santos', specialty: 'Mental Health', exp: '11 years experience' },
+              { img: 'https://randomuser.me/api/portraits/women/67.jpg', name: 'Dr. Emily Wong', specialty: 'Pediatrics', exp: '9 years experience' },
             ].map((d, i) => (
               <div key={i} className="doc-card">
-                <div className="doc-avatar" style={{ background: d.color }}>{d.initials}</div>
+                <img src={d.img} alt={d.name} style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 14px', display: 'block' }} />
                 <div className="doc-name">{d.name}</div>
                 <div className="doc-specialty">{d.specialty}</div>
                 <div className="doc-exp">{d.exp}</div>
