@@ -1,0 +1,9 @@
+{
+  "name": "Lea Medical Center",
+  "address": "825 Nicollet Mall, Minneapolis, MN",
+  "hours": "Mon-Fri 8am-6pm, Sat 9am-2pm",
+  "parking": "Free surface lot behind the building, entrance on 9th Street",
+  "walk_ins": "Not accepted — appointments only",
+  "referral_policy": "No referral needed for Family Medicine, Urgent Care, or Dermatology. Referral required for Cardiology and Mental Health.",
+  "emergency_line": "1-800-LEA-HELP"
+}

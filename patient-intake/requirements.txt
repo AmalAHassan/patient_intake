@@ -16,7 +16,7 @@ redis==5.0.1
 anthropic>=0.111.0
 
 # MCP servers
-fastmcp>=2.14.7
+fastmcp==2.14.7
 mcp>=1.28.0
 sse-starlette>=3.4.5
 httpx>=0.28.1

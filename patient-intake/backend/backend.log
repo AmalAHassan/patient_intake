@@ -1,0 +1,570 @@
+INFO:     Will watch for changes in these directories: ['/Users/hassanhassan/patient_onboarding/patient-intake/backend']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [37778] using WatchFiles
+[sms] RESEND_API_KEY set: True
+INFO:     Started server process [37787]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+INFO:     127.0.0.1:60071 - "POST /intake/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60071 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+INFO:     127.0.0.1:60071 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+INFO:     127.0.0.1:60076 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] iteration 2/10 — active agent: identity
+INFO:     127.0.0.1:60079 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+INFO:     127.0.0.1:60083 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+INFO:     127.0.0.1:60083 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: "Thank you for confirming those details, Bradley. We're all set with your identit")
+[orchestrator] iteration 2/10 — active agent: insurance
+INFO:     127.0.0.1:60083 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Perfect! Your Cigna coverage is active. Your copay is $25 for this visit.')
+[orchestrator] iteration 3/10 — active agent: routing
+INFO:     127.0.0.1:60083 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+INFO:     127.0.0.1:60083 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing -> scheduling (reason: routing complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Family Medicine'}
+[orchestrator] iteration 3/10 — active agent: scheduling
+INFO:     127.0.0.1:60087 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling -> routing (reason: department change to Mental Health, leftover_text: 'I can help with that redirect for you.')
+[orchestrator] iteration 2/10 — active agent: routing
+[orchestrator] REJECTED self-redirect: routing -> routing
+[orchestrator] iteration 3/10 — active agent: routing
+INFO:     127.0.0.1:60092 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+INFO:     127.0.0.1:60095 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+INFO:     127.0.0.1:60095 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+INFO:     127.0.0.1:60112 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [37787]
+INFO:     Started server process [38085]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:60260 - "POST /intake/start HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:60267 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your date of birth? Please use MM/DD/YYYY format."
+INFO:     127.0.0.1:60267 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:60270 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, that matches. We have a phone number ending in 2717 on file — is that still correct?'
+INFO:     127.0.0.1:60281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have an email on file starting with ste****@example.com — is that still correct?'
+INFO:     127.0.0.1:60281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: '{"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great. You have Medicare on file — is that still your current insurance?'
+INFO:     127.0.0.1:60281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Perfect. Your Medicare coverage is active, and your copay is $20 per visit. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Perfect. Your Medicare coverage is active, and your copay is $20 per visit.')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:60281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Great. Briefly describe why you're coming in today — your doctor will see this before your appointment."
+INFO:     127.0.0.1:60281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: 'Perfect, I have that down. {"redirect": "scheduling", "reason": "routing complete"}'
+[orchestrator] routing -> scheduling (reason: routing complete, leftover_text: 'Perfect, I have that down.')
+[orchestrator] iteration 2/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Family Medicine'}
+[orchestrator] iteration 3/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are some available slots:\n\n1. Dr. Patel — Tue Jul 28 at 9:00 AM\n2. Dr. Patel — Tue Jul 28 at 11:30 AM\n3. Dr. Chen — Wed Jul 29 at 8:30 AM\n4. Dr. Chen — Wed Jul 29 at 1:00 PM\n5. Dr. Patel — Thu Au'
+INFO:     127.0.0.1:60288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "routing", "reason": "department change requested"}'
+[orchestrator] scheduling -> routing (reason: department change requested, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: routing
+[orchestrator] routing said: '{"redirect": "routing", "reason": "department change requested"}'
+[orchestrator] REJECTED self-redirect: routing -> routing
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: "You're right — let me help you with that. Mental Health is a great option. Just so you know, Mental Health does require a referral from your primary care doctor. Do you have a referral on file, or wou"
+INFO:     127.0.0.1:60293 - "POST /intake/message HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60309 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Perfect — you're all set then. So we'll schedule you for Mental Health instead. Can you briefly describe why you're coming in today for your Mental Health appointment — your doctor will see this befor"
+INFO:     127.0.0.1:60309 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: 'Got it, I have that down.'
+INFO:     127.0.0.1:60314 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: 'Let me find available Mental Health slots for you.'
+INFO:     127.0.0.1:60318 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: ''
+INFO:     127.0.0.1:60318 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [38085]
+INFO:     Started server process [38637]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'services/orchestrator.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [38637]
+INFO:     Started server process [38673]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:60492 - "POST /intake/start HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:60492 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "And what's your date of birth? Please give it to me in MM/DD/YYYY format."
+INFO:     127.0.0.1:60496 - "POST /intake/message HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60499 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:60499 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, that matches. We have a phone number ending in 9054 on file — is that still correct?'
+INFO:     127.0.0.1:60505 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have an email on file starting with qjo****@example.org — is that still correct?'
+INFO:     127.0.0.1:60505 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: '{"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: '')
+[orchestrator] iteration 3/10 — active agent: insurance
+[orchestrator] insurance said: 'You have UnitedHealthcare on file — is that still your current insurance?'
+INFO:     127.0.0.1:60505 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great! Your UnitedHealthcare coverage is active. Your copay for this visit is $25. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Great! Your UnitedHealthcare coverage is active. Your copay for this visit is $2')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:60505 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Can you tell me briefly why you're coming in today — your doctor will see this before your appointment?"
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:60510 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Dermatology'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are your available Dermatology slots:\n\n1. Dr. Adams — Tue Aug 4 at 11:00 AM\n2. Dr. Adams — Thu Aug 13 at 3:30 PM\n3. Dr. Adams — Mon Aug 24 at 10:00 AM\n4. Dr. Adams — Wed Sep 2 at 8:00 AM\n\nOr woul'
+INFO:     127.0.0.1:60513 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "routing", "reason": "department change to Mental Health"}'
+[orchestrator] scheduling -> routing (reason: department change to Mental Health, leftover_text: '')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: '{"redirect": "routing", "reason": "department change from dermatology to mental health"}'
+[orchestrator] REJECTED self-redirect: routing -> routing
+[orchestrator] iteration 4/10 — active agent: routing
+[orchestrator] routing said: 'Got it — we can switch to Mental Health for your monthly group therapy session. I do want to let you know that Mental Health appointments require a referral from your primary care doctor. Do you have '
+INFO:     127.0.0.1:60518 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: 'Great! Which one — do you have an active referral on file, or do you need to get one?'
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:60522 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Mental Health'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are your available Mental Health slots:\n\n1. Dr. Santos — Tue Aug 4 at 3:30 PM\n2. Dr. Santos — Thu Aug 13 at 10:00 AM\n3. Dr. Santos — Mon Aug 24 at 8:00 AM\n4. Dr. Santos — Wed Sep 2 at 3:00 PM\n\nOr'
+INFO:     127.0.0.1:60526 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Got it — Dr. Santos on Mon Aug 24 at 8:00 AM. Shall I book that?'
+INFO:     127.0.0.1:60526 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "payment", "reason": "scheduling complete"}'
+[orchestrator] scheduling -> payment (reason: scheduling complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: payment
+[orchestrator] iteration 3/10 — active agent: payment
+[orchestrator] payment said: "Perfect! You're booked with Dr. Santos on Mon Aug 24 at 8:00 AM. You're all set — see you soon! ✓\n\nYour copay for this visit is $25. Would you like to pay now or at the clinic?"
+INFO:     127.0.0.1:60526 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: payment
+[orchestrator] iteration 2/10 — active agent: payment
+[orchestrator] payment said: "I wasn't able to process the payment link right now. Please call us at the clinic and a team member can help you complete the payment — we're at 825 Nicollet Mall, Minneapolis, MN, or you can call 1-8"
+[intake] Payment decision: later — copay: 25
+[sms] Email sent: Appointment Confirmed — Anthony Reyes with Dr. Santos on Mon Aug 24
+[fhir_client] Patient created: 1005
+INFO:     127.0.0.1:60526 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [38673]
+INFO:     Started server process [39143]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:60702 - "POST /intake/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60711 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:60711 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "And what's your date of birth? Please use MM/DD/YYYY format."
+INFO:     127.0.0.1:60711 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[tool] identity called lookup_patient — input: {'name': 'Jacob Williams', 'dob': '07/05/1956'}
+[tool] identity called get_current_date — input: {}
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:60715 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, that matches. We have a phone number ending in 3073 on file — is that still correct?'
+INFO:     127.0.0.1:60719 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have an email on file starting with mma****@example.com — is that still correct?'
+INFO:     127.0.0.1:60719 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: '{"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great! You have UnitedHealthcare on file — is that still your current insurance?'
+INFO:     127.0.0.1:60719 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[tool] insurance called check_eligibility — input: {'insurance_id': 'MBR-7504-UXVE', 'payer': 'UnitedHealthcare'}
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Perfect! Your UnitedHealthcare coverage is active, and your copay is $25. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Perfect! Your UnitedHealthcare coverage is active, and your copay is $25.')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:60719 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Briefly describe why you're coming in today — your doctor will see this before your appointment."
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:60719 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: "Got it — let me switch that to Mental Health for you. Just to confirm, you don't need a referral for Family Medicine, but Mental Health does require one. Do you have a referral from your primary care "
+INFO:     127.0.0.1:60725 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: "Perfect! Now, briefly describe why you're coming in today — your doctor will see this before your appointment."
+INFO:     127.0.0.1:60730 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Mental Health'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are the available slots:\n\n1. Dr. Santos — Tue Aug 4 at 3:30 PM\n2. Dr. Santos — Thu Aug 13 at 10:00 AM\n3. Dr. Santos — Mon Aug 24 at 8:00 AM\n4. Dr. Santos — Wed Sep 2 at 3:00 PM\n\nOr would you pref'
+INFO:     127.0.0.1:60733 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Got it — Dr. Santos on Mon Aug 24 at 8:00 AM. Shall I book that?'
+INFO:     127.0.0.1:60733 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "payment", "reason": "scheduling complete"}'
+[orchestrator] scheduling -> payment (reason: scheduling complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: payment
+[tool] payment called fhir_create_patient — input: {'name': 'Jacob Williams', 'dob': '07/05/1956', 'phone': '789-340-3073', 'email': 'mmartinez@example.com', 'insurance_id': 'MBR-7504-UXVE', 'payer': 'UnitedHealthcare', 'department': 'Mental Health', 'reason': 'monthly group session for anxiety', 'appointment_doctor': 'Dr. Santos', 'appointment_date': 'Mon Aug 24', 'appointment_time': '8:00 AM'}
+[orchestrator] iteration 3/10 — active agent: payment
+[orchestrator] payment said: "Perfect! You're booked with Dr. Santos on Mon Aug 24 at 8:00 AM. You're all set — see you soon! ✓\n\nYour copay for this visit is $25. Would you like to pay now or at the clinic?"
+INFO:     127.0.0.1:60733 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: payment
+[tool] payment called create_payment_link — input: {'amount': '2500', 'description': 'Copay for Jacob Williams - Mental Health appointment with Dr. Santos on Mon Aug 24 at 8:00 AM'}
+[orchestrator] iteration 2/10 — active agent: payment
+[orchestrator] payment said: 'I\'m unable to process the payment link right now. No problem — you can pay at the clinic or via your patient portal. {"status": "complete", "data": {"name": "Jacob Williams", "dob": "07/05/1956", "pho'
+[intake] Payment decision: later — copay: 25
+[sms] Email sent: Appointment Confirmed — Jacob Williams with Dr. Santos on Mon Aug 24
+[fhir_client] Patient created: 1007
+INFO:     127.0.0.1:60733 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [39143]
+INFO:     Started server process [39610]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [39610]
+INFO:     Started server process [40009]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:60976 - "POST /intake/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60982 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:60982 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "And what's your date of birth? Please give it to me in MM/DD/YYYY format."
+INFO:     127.0.0.1:60982 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[tool] identity called get_current_date — input: {}
+[tool] identity called lookup_patient — input: {'name': 'Jeremy Frye', 'dob': '11/17/1956'}
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:60987 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, that matches. We have a phone number ending in 9167 on file — is that still correct?'
+INFO:     127.0.0.1:60991 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have an email on file starting with bon****@example.com — is that still correct?'
+INFO:     127.0.0.1:60991 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: '{"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great. You have UnitedHealthcare on file — is that still your current insurance?'
+INFO:     127.0.0.1:60991 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[tool] insurance called check_eligibility — input: {'insurance_id': 'MBR-9252-CRPH', 'payer': 'UnitedHealthcare'}
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Your coverage is active. Your copay is $25. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Your coverage is active. Your copay is $25.')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:60991 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Can you tell me briefly why you're coming in today — your doctor will see this before your appointment?"
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:60991 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Family Medicine'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are some available slots:\n\n1. Dr. Patel — Tue Jul 28 at 9:00 AM\n2. Dr. Patel — Tue Jul 28 at 11:30 AM\n3. Dr. Chen — Wed Jul 29 at 8:30 AM\n4. Dr. Chen — Wed Jul 29 at 1:00 PM\n5. Dr. Patel — Thu Au'
+INFO:     127.0.0.1:60995 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Got it — Dr. Patel on Tue Jul 28 at 9:00 AM. Shall I book that?'
+INFO:     127.0.0.1:60995 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "payment", "reason": "scheduling complete"}'
+[orchestrator] scheduling -> payment (reason: scheduling complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: payment
+[tool] payment called fhir_create_patient — input: {'name': 'Jeremy Frye', 'dob': '11/17/1956', 'phone': '904-431-9167', 'email': 'bonnie73@example.com', 'insurance_id': 'MBR-9252-CRPH', 'payer': 'UnitedHealthcare', 'department': 'Family Medicine', 'reason': 'covid vaccine', 'appointment_doctor': 'Dr. Patel', 'appointment_date': 'Tue Jul 28', 'appointment_time': '9:00 AM'}
+[orchestrator] iteration 3/10 — active agent: payment
+[orchestrator] payment said: "Perfect! You're booked with Dr. Patel on Tue Jul 28 at 9:00 AM. You're all set — see you soon! ✓\n\nYour copay for this visit is $25. Would you like to pay now or at the clinic?"
+INFO:     127.0.0.1:60995 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: payment
+[orchestrator] payment said: "Great! I don't have a direct payment link tool available. Let me search for how to create a simple payment link for this copay. Based on the Stripe documentation, I can help you with a payment link. I"
+[intake] Payment decision: now — copay: 25
+[sms] Email sent: Appointment Confirmed — Jeremy Frye with Dr. Patel on Tue Jul 28
+[fhir_client] Patient created: 1009
+INFO:     127.0.0.1:60995 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/orchestrator.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40009]
+INFO:     Started server process [40226]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40226]
+INFO:     Started server process [40259]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_claude_guards.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40259]
+INFO:     Started server process [40281]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:61178 - "POST /intake/start HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:61178 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "And what's your date of birth? Please use MM/DD/YYYY format."
+INFO:     127.0.0.1:61183 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[tool] identity called get_current_date — input: {}
+[tool] identity called lookup_patient — input: {'name': 'Lisa Watts', 'dob': '02/19/1959'}
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:61187 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'I found your record, Lisa. We have your phone number ending in 2783 on file — is that still correct?'
+INFO:     127.0.0.1:61193 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have your email on file as hil****@example.net — is that still correct?'
+INFO:     127.0.0.1:61193 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, thank you. {"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: 'Perfect, thank you.')
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'You have Aetna on file — is that still your current insurance?'
+INFO:     127.0.0.1:61193 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[tool] insurance called check_eligibility — input: {'insurance_id': 'MBR-3360-FAQW', 'payer': 'Aetna'}
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great! Your Aetna coverage is active, and your copay is $25. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Great! Your Aetna coverage is active, and your copay is $25.')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:61193 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Can you tell me briefly why you're coming in today — your doctor will see this before your appointment?"
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:61193 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Mental Health'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are your available Mental Health appointment slots:\n\n1. Dr. Santos — Tue Aug 4 at 3:30 PM\n2. Dr. Santos — Thu Aug 13 at 10:00 AM\n3. Dr. Santos — Mon Aug 24 at 8:00 AM\n4. Dr. Santos — Wed Sep 2 at'
+INFO:     127.0.0.1:61209 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Got it — Dr. Santos on Tue Aug 4 at 3:30 PM. Shall I book that?'
+INFO:     127.0.0.1:61209 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "payment", "reason": "scheduling complete"}'
+[orchestrator] scheduling -> payment (reason: scheduling complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: payment
+[orchestrator] payment said: "Perfect! You're booked with Dr. Santos on Tue Aug 4 at 3:30 PM. You're all set — see you soon! ✓\n\nYour copay for this visit is $25. Would you like to pay now or at the clinic?"
+INFO:     127.0.0.1:61209 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: payment
+[stripe] MCP tool called: stripe_implementation_planner — input: {'message': 'Create a payment link for a $25 copay. Patient: Lisa Watts. Appointment: Dr. Santos, Mental Health, Tue Aug 4 at 3:30 PM. One-time payment, no subscription.'}
+[stripe] MCP tool result — is_error=False: [BetaTextBlock(citations=None, text='{"integration_shape":null,"type":"guide","instructions":"Walk through each decision tree question using the merchant\'s context. For each question, choose the opti
+[stripe] MCP tool called: stripe_api_search — input: {'intent': 'create', 'resource': 'payment link'}
+[stripe] MCP tool result — is_error=False: [BetaTextBlock(citations=None, text='Found 2 matching operations in OpenAPI spec version 2026-06-24.preview:\n\n## PostPaymentLinks\n  POST /v1/payment_links\n  Create a payment link\n\n  Body params:
+[stripe] MCP tool called: stripe_api_write — input: {'stripe_api_operation_id': 'PostPaymentLinks', 'parameters': {'line_items': [{'price_data': {'currency': 'usd', 'product_data': {'name': 'Copay - Mental Health Appointment'}, 'unit_amount': 2500}, 'quantity': 1}]}}
+[stripe] MCP tool result — is_error=False: [BetaTextBlock(citations=None, text='{"id":"plink_1TxmWs3MBWtY8H4qazhns6Iw","object":"payment_link","active":true,"after_completion":{"hosted_confirmation":{"custom_message":null},"type":"hosted_confi
+[tool] payment called fhir_create_patient — input: {'name': 'Lisa Watts', 'dob': '02/19/1959', 'phone': '0018776332783', 'email': 'hillashley@example.net', 'insurance_id': 'MBR-3360-FAQW', 'payer': 'Aetna', 'department': 'Mental Health', 'reason': 'therapy appointment', 'appointment_doctor': 'Dr. Santos', 'appointment_date': 'Tue Aug 4', 'appointment_time': '3:30 PM'}
+[orchestrator] iteration 2/10 — active agent: payment
+[orchestrator] payment said: '{"status": "complete", "data": {"name": "Lisa Watts", "dob": "02/19/1959", "phone": "0018776332783", "email": "hillashley@example.net", "insurance_id": "MBR-3360-FAQW", "payer": "Aetna", "copay": "25"'
+[intake] Payment decision: now — copay: 25
+[sms] Email sent: Appointment Confirmed — Lisa Watts with Dr. Santos on Tue Aug 4
+[fhir_client] Patient created: 1011
+INFO:     127.0.0.1:61209 - "POST /intake/message HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'services/claude.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40281]
+INFO:     Started server process [40582]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_claude_guards.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40582]
+INFO:     Started server process [40604]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+[sms] RESEND_API_KEY set: True
+[patient_lookup] Loaded 55500 patients from /Users/hassanhassan/patient_onboarding/patient-intake/backend/data/patients_enriched.csv
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Hi, welcome! Are you a new patient or a returning patient?'
+INFO:     127.0.0.1:61276 - "POST /intake/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61276 - "OPTIONS /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "What's your full name?"
+INFO:     127.0.0.1:61276 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: "And what's your date of birth? Please use MM/DD/YYYY format."
+INFO:     127.0.0.1:61281 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[tool] identity called get_current_date — input: {}
+[tool] identity called lookup_patient — input: {'name': 'Gary Bowen', 'dob': '03/28/1997'}
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: 'I found a record — what city and state do you have on file with us?'
+INFO:     127.0.0.1:61284 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'Perfect, that matches. We have a phone number ending in 9401 on file — is that still correct?'
+INFO:     127.0.0.1:61288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[orchestrator] identity said: 'And we have an email on file starting with tay****@example.net — is that still correct?'
+INFO:     127.0.0.1:61288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: identity
+[tool] identity called get_current_date — input: {}
+[intake] get_current_date → 2026-07-27
+[orchestrator] iteration 2/10 — active agent: identity
+[orchestrator] identity said: '{"redirect": "insurance", "reason": "identity complete"}'
+[orchestrator] identity -> insurance (reason: identity complete, leftover_text: '')
+[orchestrator] iteration 3/10 — active agent: insurance
+[orchestrator] insurance said: 'You have Blue Cross on file — is that still your current insurance?'
+INFO:     127.0.0.1:61288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: insurance
+[tool] insurance called check_eligibility — input: {'payer': 'Blue Cross', 'insurance_id': 'MBR-3237-SQDN'}
+[orchestrator] iteration 2/10 — active agent: insurance
+[orchestrator] insurance said: 'Great! Your Blue Cross coverage is active. Your copay for this visit is $25. {"redirect": "routing", "reason": "insurance complete"}'
+[orchestrator] insurance -> routing (reason: insurance complete, leftover_text: 'Great! Your Blue Cross coverage is active. Your copay for this visit is $25.')
+[orchestrator] iteration 3/10 — active agent: routing
+[orchestrator] routing said: 'Which department are you visiting today?'
+INFO:     127.0.0.1:61288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: routing
+[orchestrator] routing said: "Can you tell me briefly why you're coming in today — your doctor will see this before your appointment?"
+[orchestrator] FORCED ADVANCE: routing stalled 2 turns without redirecting — advancing to scheduling regardless
+INFO:     127.0.0.1:61288 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[scheduling] fhir_get_slots called — input: {'department': 'Family Medicine'}
+[orchestrator] iteration 2/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Here are some available slots:\n\n1. Dr. Patel — Tue Jul 28 at 9:00 AM\n2. Dr. Patel — Tue Jul 28 at 11:30 AM\n3. Dr. Chen — Wed Jul 29 at 8:30 AM\n4. Dr. Chen — Wed Jul 29 at 1:00 PM\n5. Dr. Patel — Thu Au'
+INFO:     127.0.0.1:61292 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: 'Got it — Dr. Patel on Tue Jul 28 at 9:00 AM. Shall I book that?'
+INFO:     127.0.0.1:61303 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: scheduling
+[orchestrator] scheduling said: '{"redirect": "payment", "reason": "scheduling complete"}'
+[orchestrator] scheduling -> payment (reason: scheduling complete, leftover_text: '')
+[orchestrator] iteration 2/10 — active agent: payment
+[tool] payment called fhir_create_patient — input: {'name': 'Gary Bowen', 'dob': '03/28/1997', 'phone': '579-404-9401', 'email': 'taylorelizabeth@example.net', 'insurance_id': 'MBR-3237-SQDN', 'payer': 'Blue Cross', 'department': 'Family Medicine', 'reason': 'covid booster', 'appointment_doctor': 'Dr. Patel', 'appointment_date': 'Tue Jul 28', 'appointment_time': '9:00 AM'}
+[orchestrator] iteration 3/10 — active agent: payment
+[orchestrator] payment said: "Perfect! You're booked with Dr. Patel on Tue Jul 28 at 9:00 AM. You're all set — see you soon! ✓\n\nYour copay for this visit is $25. Would you like to pay now or at the clinic?"
+INFO:     127.0.0.1:61303 - "POST /intake/message HTTP/1.1" 200 OK
+[orchestrator] iteration 1/10 — active agent: payment
+[orchestrator] payment said: "I need to create a simple payment link for the $25 copay. Let me handle that for you. Great! Let's take care of that now. Please click this link to pay your $25 copay:\n\nhttps://buy.stripe.com/test_bJe"
+[intake] Payment decision: now — copay: 25
+[sms] Email sent: Appointment Confirmed — Gary Bowen with Dr. Patel on Tue Jul 28
+[fhir_client] Patient created: 1013
+INFO:     127.0.0.1:61303 - "POST /intake/message HTTP/1.1" 200 OK

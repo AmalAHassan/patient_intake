@@ -179,7 +179,7 @@ export default function HomePage() {
         .doc-specialty { font-size: 13px; color: #1a5ce4; font-weight: 500; margin-bottom: 8px; }
         .doc-exp { font-size: 12px; color: #718096; }
 
-        /* Lea Health CTA */
+        /* Lea's Health CTA */
         .lea-cta {
           background: linear-gradient(135deg, #1a5ce4 0%, #0a3a99 100%);
           padding: 80px 56px; text-align: center;
@@ -313,7 +313,7 @@ export default function HomePage() {
           <h1>Your health is<br />our <em>priority</em></h1>
           <p className="hero-sub">
             Lea Medical Center provides world-class care across 12 specialties.
-            Now with Lea Health AI — book your appointment in under 90 seconds, insurance verified instantly.
+            Now with Lea's Health AI — book your appointment in under 90 seconds, insurance verified instantly.
           </p>
           <div className="hero-actions">
             <button className="btn-white" onClick={() => setChatOpen(true)}>Book appointment</button>
@@ -368,7 +368,7 @@ export default function HomePage() {
         <h2 className="section-h2">Care you can trust, every visit</h2>
         <div className="why-grid">
           {[
-            { icon: '⚡', title: 'AI-powered intake', desc: 'Lea Health AI completes your registration in under 90 seconds — insurance verified, appointment booked, no paperwork.' },
+            { icon: '⚡', title: 'AI-powered intake', desc: 'Lea\'s Health AI completes your registration in under 90 seconds — insurance verified, appointment booked, no paperwork.' },
             { icon: '🏆', title: 'Board-certified specialists', desc: 'Every physician at Lea Medical is board-certified with an average of 15 years of clinical experience.' },
             { icon: '🔒', title: 'HIPAA compliant', desc: 'Your health data is protected by enterprise-grade encryption and full HIPAA compliance at every step.' },
             { icon: '📱', title: 'Patient portal', desc: 'View your appointments, pay copays, and access your records anytime from any device.' },
@@ -407,11 +407,11 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Lea Health CTA */}
+      {/* Lea's Health CTA */}
       <section className="lea-cta">
-        <div className="lea-cta-tag">✨ Powered by Lea Health AI</div>
+        <div className="lea-cta-tag">✨ Powered by Lea's Health AI</div>
         <h2>Book your appointment in 90 seconds</h2>
-        <p className="lea-cta-sub">No phone calls. No paperwork. Insurance verified instantly.<br />Just tell Lea Health why you're coming in.</p>
+        <p className="lea-cta-sub">No phone calls. No paperwork. Insurance verified instantly.<br />Just tell Lea's Health why you're coming in.</p>
         <div className="lea-cta-actions">
           <button className="btn-white" style={{ padding: '14px 32px', fontSize: 15 }} onClick={() => setChatOpen(true)}>
             Start intake now →
@@ -470,7 +470,7 @@ export default function HomePage() {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
-        <span className="launcher-text">Talk to Lea Health</span>
+        <span className="launcher-text">Talk to Lea's Health</span>
         <div className="launcher-badge">1</div>
       </button>
 
@@ -482,13 +482,13 @@ export default function HomePage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div className="chat-avatar-small">L</div>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>Lea Health</div>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: '#fff' }}>Lea's Health</div>
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 1 }}>AI patient intake · Lea Medical Center</div>
                 </div>
               </div>
               <button className="chat-close" onClick={() => setChatOpen(false)}>✕</button>
             </div>
-            <iframe src="/intake" style={{ flex: 1, border: 'none', width: '100%' }} title="Lea Health Intake" />
+            <iframe src="/intake" style={{ flex: 1, border: 'none', width: '100%' }} title="Lea's Health Intake" />
           </div>
         </div>
       )}

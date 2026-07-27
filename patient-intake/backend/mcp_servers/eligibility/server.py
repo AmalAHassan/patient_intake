@@ -187,9 +187,9 @@ if __name__ == "__main__":
 
     # Run HTTP /call server on port 5102
     def run_http():
-        _uv.run(http_app, host="127.0.0.1", port=5102, log_level="error")
+        _uv.run(http_app, host="0.0.0.0", port=5102, log_level="error")
 
     threading.Thread(target=run_http, daemon=True).start()
 
     # Run MCP SSE server on port 5002
-    mcp.run(transport="sse", host="127.0.0.1", port=5002)
+    mcp.run(transport="sse", host="0.0.0.0", port=5002)

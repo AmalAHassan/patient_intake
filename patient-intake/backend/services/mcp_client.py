@@ -12,7 +12,8 @@ When deploying:
 import json
 import httpx
 import asyncio
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
 from config import settings
 
 # ── MCP server URLs ────────────────────────────────────────────────────────
@@ -41,50 +42,70 @@ MCP_SERVER_URLS = {
 }
 
 
-# ── Slot generator ─────────────────────────────────────────────────────────
+# ── Slot generator — mirrors hapi_fhir/server.py's logic exactly, so the
+#    fallback behaves identically to the real Docker-backed tool ───────────
 
-def _get_slots() -> list[dict]:
-    """Generate slots dynamically for the next 10 weekdays."""
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun",
+             "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+DEPARTMENT_DOCTORS = {
+    "Family Medicine": ["Dr. Patel", "Dr. Chen"],
+    "OB/GYN":          ["Dr. Okafor"],
+    "Cardiology":      ["Dr. Kim"],
+    "Urgent Care":     ["Dr. Rivera"],
+    "Mental Health":   ["Dr. Santos"],
+    "Dermatology":     ["Dr. Adams"],
+    "Pediatrics":      ["Dr. Wong"],
+}
+TIME_SLOTS = ["9:00 AM", "11:30 AM", "1:00 PM", "3:00 PM"]
+
+
+def _fmt_date(d: date) -> str:
+    return f"{DAY_NAMES[d.weekday()]} {MONTHS[d.month-1]} {d.day}"
+
+
+def _build_slots(days_ahead: int = 30) -> list[dict]:
+    """Generate 2 slots PER DEPARTMENT on EVERY weekday — matches
+    hapi_fhir/server.py's real logic exactly, so the fallback never
+    behaves differently (e.g. having gaps the real tool doesn't)."""
     today    = date.today()
     weekdays = []
     d        = today + timedelta(days=1)
-    while len(weekdays) < 10:
+    while len(weekdays) < days_ahead:
         if d.weekday() < 5:
             weekdays.append(d)
         d += timedelta(days=1)
 
-    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-    months    = ["Jan","Feb","Mar","Apr","May","Jun",
-                 "Jul","Aug","Sep","Oct","Nov","Dec"]
+    slots = []
+    slot_num = 0
+    for dept, doctors in DEPARTMENT_DOCTORS.items():
+        for day_idx, day_obj in enumerate(weekdays):
+            for slot_in_day in range(2):
+                doctor   = doctors[(day_idx + slot_in_day) % len(doctors)]
+                time_str = TIME_SLOTS[(day_idx * 2 + slot_in_day) % len(TIME_SLOTS)]
+                slot_num += 1
+                slots.append({
+                    "id": f"s{slot_num}",
+                    "doctor": doctor,
+                    "specialty": dept,
+                    "date_obj": day_obj,
+                    "date": _fmt_date(day_obj),
+                    "time": time_str,
+                    "day": day_obj.strftime("%A").lower(),
+                })
+    return slots
 
-    def fmt(d: date) -> str:
-        return f"{day_names[d.weekday()]} {months[d.month-1]} {d.day}"
 
-    def dow(d: date) -> str:
-        return d.strftime("%A").lower()
+MONTH_NAMES = ["january","february","march","april","may","june",
+               "july","august","september","october","november","december"]
 
-    return [
-        {"id": "s1",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": fmt(weekdays[0]), "time": "9:00 AM",  "day": dow(weekdays[0])},
-        {"id": "s2",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": fmt(weekdays[0]), "time": "11:30 AM", "day": dow(weekdays[0])},
-        {"id": "s3",  "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": fmt(weekdays[2]), "time": "1:00 PM",  "day": dow(weekdays[2])},
-        {"id": "s4",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": fmt(weekdays[3]), "time": "8:30 AM",  "day": dow(weekdays[3])},
-        {"id": "s5",  "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": fmt(weekdays[4]), "time": "10:00 AM", "day": dow(weekdays[4])},
-        {"id": "s6",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": fmt(weekdays[0]), "time": "2:00 PM",  "day": dow(weekdays[0])},
-        {"id": "s7",  "doctor": "Dr. Okafor", "specialty": "OB/GYN",         "date": fmt(weekdays[3]), "time": "9:30 AM",  "day": dow(weekdays[3])},
-        {"id": "s8",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": fmt(weekdays[1]), "time": "3:00 PM",  "day": dow(weekdays[1])},
-        {"id": "s9",  "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": fmt(weekdays[4]), "time": "8:00 AM",  "day": dow(weekdays[4])},
-        {"id": "s10", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": fmt(weekdays[0]), "time": "10:00 AM", "day": dow(weekdays[0])},
-        {"id": "s11", "doctor": "Dr. Rivera", "specialty": "Urgent Care",     "date": fmt(weekdays[1]), "time": "3:30 PM",  "day": dow(weekdays[1])},
-        {"id": "s12", "doctor": "Dr. Santos", "specialty": "Mental Health",   "date": fmt(weekdays[2]), "time": "11:00 AM", "day": dow(weekdays[2])},
-        {"id": "s13", "doctor": "Dr. Santos", "specialty": "Mental Health",   "date": fmt(weekdays[5]), "time": "2:00 PM",  "day": dow(weekdays[5])},
-        {"id": "s14", "doctor": "Dr. Adams",  "specialty": "Dermatology",     "date": fmt(weekdays[3]), "time": "9:00 AM",  "day": dow(weekdays[3])},
-        {"id": "s15", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": fmt(weekdays[1]), "time": "2:30 PM",  "day": dow(weekdays[1])},
-        {"id": "s16", "doctor": "Dr. Wong",   "specialty": "Pediatrics",      "date": fmt(weekdays[4]), "time": "8:00 AM",  "day": dow(weekdays[4])},
-        {"id": "s17", "doctor": "Dr. Patel",  "specialty": "Family Medicine", "date": fmt(weekdays[6]), "time": "9:00 AM",  "day": dow(weekdays[6])},
-        {"id": "s18", "doctor": "Dr. Chen",   "specialty": "Family Medicine", "date": fmt(weekdays[7]), "time": "11:00 AM", "day": dow(weekdays[7])},
-        {"id": "s19", "doctor": "Dr. Kim",    "specialty": "Cardiology",      "date": fmt(weekdays[8]), "time": "10:00 AM", "day": dow(weekdays[8])},
-        {"id": "s20", "doctor": "Dr. Santos", "specialty": "Mental Health",   "date": fmt(weekdays[9]), "time": "3:00 PM",  "day": dow(weekdays[9])},
-    ]
+
+def _month_number(month: str) -> int | None:
+    m = month.strip().lower()
+    if m in MONTH_NAMES:
+        return MONTH_NAMES.index(m) + 1
+    return None
 
 
 def _slot_hour(time_str: str) -> int:
@@ -106,8 +127,6 @@ def _parse_hour_cutoff(filter_time: str) -> int:
         return 17
     if "morning" in ft:
         return 0
-    # Look for a number like "after 2pm" or "2:00 pm"
-    import re
     match = re.search(r'(\d{1,2})', ft)
     if match:
         h = int(match.group(1))
@@ -115,6 +134,65 @@ def _parse_hour_cutoff(filter_time: str) -> int:
             h += 12
         return h
     return 0
+
+
+def _week_bounds(which: str) -> tuple[date, date]:
+    """Return (start, end) dates for 'this' or 'next' calendar week (Mon-Sun)."""
+    today = date.today()
+    start_of_this_week = today - timedelta(days=today.weekday())
+    if which == "next":
+        start = start_of_this_week + timedelta(days=7)
+    else:
+        start = start_of_this_week
+    end = start + timedelta(days=6)
+    return start, end
+
+
+def _filter_slots(
+    department: str,
+    day: str = "",
+    after_time: str = "",
+    before_time: str = "",
+    week: str = "",
+    target_date: str = "",
+    month: str = "",
+) -> list[dict]:
+    slots = _build_slots()
+    dept_lower = department.lower().strip()
+    matched = [s for s in slots if dept_lower in s["specialty"].lower()]
+    if not matched:
+        matched = slots[:5]
+
+    if month:
+        target_month = _month_number(month)
+        if target_month:
+            matched = [s for s in matched if s["date_obj"].month == target_month]
+
+    if target_date:
+        try:
+            parsed = datetime.strptime(target_date.strip(), "%m/%d/%Y").date()
+            matched = [s for s in matched if s["date_obj"] == parsed]
+        except ValueError:
+            pass
+
+    if week:
+        w = week.lower().strip()
+        if w in ("this", "next"):
+            start, end = _week_bounds(w)
+            matched = [s for s in matched if start <= s["date_obj"] <= end]
+
+    if day:
+        day_lower = day.lower().strip()
+        matched = [s for s in matched if day_lower in s["day"]]
+
+    if after_time:
+        cutoff = _parse_hour_cutoff(after_time)
+        matched = [s for s in matched if _slot_hour(s["time"]) >= cutoff]
+    if before_time:
+        cutoff = _parse_hour_cutoff(before_time)
+        matched = [s for s in matched if _slot_hour(s["time"]) < cutoff]
+
+    return [{k: v for k, v in s.items() if k != "date_obj"} for s in matched]
 
 
 # ── MCP HTTP client ────────────────────────────────────────────────────────
@@ -188,45 +266,20 @@ async def _fallback(tool_name: str, tool_input: dict) -> str:
 
         # ── fhir_get_slots ─────────────────────────────────────────────────
         if tool_name == "fhir_get_slots":
-            dept        = tool_input.get("department", "").lower()
-            filter_day  = tool_input.get("day", "").lower().strip()
-            filter_time = tool_input.get("after_time", "").lower().strip()
-            slots       = _get_slots()
-
-            # Filter by department
-            matched = [s for s in slots if dept in s["specialty"].lower()]
+            matched = _filter_slots(
+                department=tool_input.get("department", ""),
+                day=tool_input.get("day", ""),
+                after_time=tool_input.get("after_time", ""),
+                before_time=tool_input.get("before_time", ""),
+                week=tool_input.get("week", ""),
+                target_date=tool_input.get("date", ""),
+                month=tool_input.get("month", ""),
+            )
             if not matched:
-                matched = slots[:3]
-
-            # Filter by day if requested
-            if filter_day:
-                day_filtered = [s for s in matched if filter_day in s["day"]]
-                if day_filtered:
-                    matched = day_filtered
-                else:
-                    available_days = sorted(set(s["day"].capitalize() for s in matched))
-                    return json.dumps({
-                        "slots": [],
-                        "message": f"No slots available on {filter_day.capitalize()} for {dept}.",
-                        "available_days": available_days,
-                    })
-
-            # Filter by time if requested
-            if filter_time:
-                try:
-                    cutoff        = _parse_hour_cutoff(filter_time)
-                    time_filtered = [s for s in matched if _slot_hour(s["time"]) >= cutoff]
-                    if time_filtered:
-                        matched = time_filtered
-                    else:
-                        return json.dumps({
-                            "slots": [],
-                            "message": f"No slots after {filter_time} for {dept}.",
-                            "available_times": [s["time"] for s in matched[:5]],
-                        })
-                except Exception:
-                    pass
-
+                return json.dumps({
+                    "slots": [],
+                    "message": "No slots match that filter.",
+                })
             return json.dumps({"slots": matched, "message": "available"})
 
         # ── fhir_create_patient ────────────────────────────────────────────

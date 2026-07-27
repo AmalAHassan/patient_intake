@@ -80,7 +80,7 @@ if __name__ == "__main__":
     import uvicorn as _uv
 
     def run_http():
-        _uv.run(http_app, host="127.0.0.1", port=5101, log_level="error")
+        _uv.run(http_app, host="0.0.0.0", port=5101, log_level="error")
 
     threading.Thread(target=run_http, daemon=True).start()
-    mcp.run(transport="sse", host="127.0.0.1", port=5001)
+    mcp.run(transport="sse", host="0.0.0.0", port=5001)

@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
-import { loadStripe } from '@stripe/stripe-js'
-import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js'
 
 interface Message {
   role: 'bot' | 'user' | 'error' | 'system'
@@ -26,7 +24,10 @@ interface IntakeData {
 }
 
 type Status = 'collecting' | 'complete' | 'emergency_redirect' | 'staff_requested' | 'ended'
-type PayStatus = 'idle' | 'asking' | 'paying' | 'paid' | 'skipped'
+// 'now'/'later' reflect what the patient told Claude conversationally.
+// There is no 'paid' confirmation without a Stripe webhook wired in — see
+// note below.
+type PayDecision = 'none' | 'now' | 'later'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -63,6 +64,11 @@ function cleanBotMessage(text: string): string {
     .trim()
 }
 
+function extractStripeLink(text: string): string | null {
+  const match = text.match(/https:\/\/(?:buy|checkout)\.stripe\.com\/\S+/)
+  return match ? match[0] : null
+}
+
 function maskEmail(email: string): string {
   if (!email || !email.includes('@')) return email
   const [local, domain] = email.split('@')
@@ -87,16 +93,15 @@ function getQuickReplies(lastBotMsg: string): string[] {
     return ['Yes', 'No, it changed']
   if (msg.includes('pay now or at the clinic'))
     return ['Pay now', 'Pay at clinic']
-  if (msg.includes('which department') || msg.includes('family medicine')) {
+  const numberedLines = lastBotMsg.split('\n').filter(l => /^\d+\./.test(l.trim()))
+  if (numberedLines.length > 0) {
+    return numberedLines.map(l => l.trim())
+  }
+  if (msg.includes('which department are you visiting'))
     return [
       '1. Family Medicine', '2. OB/GYN', '3. Cardiology', '4. Urgent Care',
       '5. Mental Health', '6. Dermatology', '7. Pediatrics', '8. Other',
     ]
-  }
-  if (msg.includes('which one works best') || msg.includes('available appointment') || msg.includes('available slot')) {
-    const lines = lastBotMsg.split('\n').filter(l => /^\d+\./.test(l.trim()))
-    if (lines.length > 0) return lines.map(l => l.trim())
-  }
   return []
 }
 
@@ -123,73 +128,6 @@ function QuickReplies({ replies, onSelect }: { replies: string[]; onSelect: (r: 
           }}
         >{r}</button>
       ))}
-    </div>
-  )
-}
-
-function PaymentForm({ patientId, copay, patientName, doctor, date, onPaid, onSkip }: {
-  patientId: string; copay: string; patientName: string; doctor: string; date: string
-  onPaid: () => void; onSkip: () => void
-}) {
-  const stripe = useStripe()
-  const elements = useElements()
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  const handlePay = async () => {
-    if (!stripe || !elements) return
-    setLoading(true); setError('')
-    try {
-      const res = await fetch(`${API}/payment/create-intent`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient_id: patientId, amount_dollars: parseFloat(copay), patient_name: patientName, description: `Copay — ${doctor} ${date}` }),
-      })
-      const { client_secret, payment_intent_id } = await res.json()
-      const card = elements.getElement(CardElement)
-      if (!card) return
-      const result = await stripe.confirmCardPayment(client_secret, { payment_method: { card } })
-      if (result.error) {
-        setError(result.error.message || 'Payment failed')
-      } else if (result.paymentIntent?.status === 'succeeded') {
-        await fetch(`${API}/payment/confirm`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ patient_id: patientId, payment_intent_id }),
-        })
-        onPaid()
-      }
-    } catch (e: any) {
-      setError(e.message || 'Something went wrong')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div style={{
-      background: '#fff', border: '1px solid #e8ddd6',
-      borderRadius: 16, padding: '18px 20px', maxWidth: 360,
-      alignSelf: 'flex-start', marginTop: 4,
-      boxShadow: '0 1px 4px rgba(44,26,20,0.06)',
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: '#2c1a14', marginBottom: 2 }}>Pay copay — ${copay}</div>
-      <div style={{ fontSize: 12, color: '#9e8880', marginBottom: 14 }}>{doctor} · {date}</div>
-      <div style={{ border: '1px solid #e8ddd6', borderRadius: 8, padding: '10px 12px', background: '#faf7f3', marginBottom: 10 }}>
-        <CardElement options={{ style: { base: { fontSize: '14px', color: '#2c1a14', fontFamily: 'Barlow, sans-serif' } } }} />
-      </div>
-      {error && <div style={{ fontSize: 12, color: '#b04030', marginBottom: 8 }}>{error}</div>}
-      <button onClick={handlePay} disabled={loading} style={{
-        width: '100%', padding: '9px', borderRadius: 8,
-        background: loading ? '#c4a89e' : '#8b5e52', border: 'none', color: '#fff',
-        fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer',
-        fontFamily: 'inherit', marginBottom: 6, letterSpacing: '0.02em',
-      }}>{loading ? 'Processing...' : `Pay $${copay}`}</button>
-      <button onClick={onSkip} disabled={loading} style={{
-        width: '100%', padding: '9px', borderRadius: 8, background: 'transparent',
-        border: '1px solid #e8ddd6', color: '#9e8880', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
-      }}>Pay at the clinic</button>
-      <div style={{ fontSize: 11, color: '#c4a89e', textAlign: 'center', marginTop: 8 }}>
-        Test: 4242 4242 4242 4242 · any expiry · any CVC
-      </div>
     </div>
   )
 }
@@ -288,9 +226,12 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
   )
 }
 
-function ConfirmationCard({ data, patientId, payStatus, stripePromise, onPaid, onSkip, onRestart }: {
-  data: IntakeData; patientId: string | null; payStatus: PayStatus; stripePromise: any
-  onPaid: () => void; onSkip: () => void; onRestart: () => void
+// Payment is now handled entirely conversationally, via the payment
+// agent's Stripe MCP tool sharing a link directly in chat (auto-opened
+// in a new tab). This card is a summary only — no buttons, no separate
+// Checkout Session flow.
+function ConfirmationCard({ data, payDecision, onRestart }: {
+  data: IntakeData; payDecision: PayDecision; onRestart: () => void
 }) {
   const Field = ({ label, value }: { label: string; value: string }) =>
     value ? (
@@ -343,28 +284,16 @@ function ConfirmationCard({ data, patientId, payStatus, stripePromise, onPaid, o
             <span style={{ fontSize: 11, color: '#9e8880', minWidth: 100, textTransform: 'uppercase', letterSpacing: '0.05em', paddingTop: 1 }}>Copay</span>
             <span style={{ fontSize: 13, color: '#2c1a14', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
               ${data.copay}
-              {payStatus === 'paid' && <span style={{ fontSize: 10, background: '#f5ede6', color: '#8b5e52', padding: '2px 7px', borderRadius: 20 }}>Paid ✓</span>}
-              {payStatus === 'skipped' && <span style={{ fontSize: 10, background: '#fdf4e8', color: '#a07030', padding: '2px 7px', borderRadius: 20 }}>Pay at clinic</span>}
+              {payDecision === 'now' && <span style={{ fontSize: 10, background: '#f5ede6', color: '#8b5e52', padding: '2px 7px', borderRadius: 20 }}>Payment link sent</span>}
+              {payDecision === 'later' && <span style={{ fontSize: 10, background: '#fdf4e8', color: '#a07030', padding: '2px 7px', borderRadius: 20 }}>Pay at clinic</span>}
             </span>
           </div>
         )}
       </div>
 
-      {showCopay && payStatus === 'asking' && patientId && stripePromise && (
-        <div style={{ padding: '0 20px 16px' }}>
-          <div style={{ fontSize: 12, color: '#6b4a40', marginBottom: 10 }}>
-            Your copay is <strong>${data.copay}</strong>. Pay now or at the clinic?
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={onPaid} style={{ padding: '7px 16px', borderRadius: 8, background: '#8b5e52', border: 'none', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Pay now</button>
-            <button onClick={onSkip} style={{ padding: '7px 16px', borderRadius: 8, background: 'transparent', border: '1px solid #e8ddd6', color: '#9e8880', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Pay at clinic</button>
-          </div>
-        </div>
-      )}
-
       <div style={{ padding: '10px 20px', borderTop: '1px solid #f0e8e0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#faf7f3' }}>
         <span style={{ fontSize: 10, color: '#9e8880' }}>
-          {payStatus === 'paid' ? 'Payment confirmed' : 'A reminder will be sent before your visit'}
+          A reminder will be sent before your visit
         </span>
         <button onClick={onRestart} style={{ fontSize: 11, color: '#8b5e52', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
           New intake
@@ -383,24 +312,15 @@ export default function IntakePage() {
   const [intakeData, setIntakeData]         = useState<IntakeData | null>(null)
   const [patientId, setPatientId]           = useState<string | null>(null)
   const [currentStep, setCurrentStep]       = useState(1)
-  const [payStatus, setPayStatus]           = useState<PayStatus>('idle')
-  const [showStripe, setShowStripe]         = useState(false)
+  const [payDecision, setPayDecision]       = useState<PayDecision>('none')
   const [quickReplyUsed, setQuickReplyUsed] = useState(false)
   const [consentSigned, setConsentSigned]   = useState(false)
-  const [stripePromise, setStripePromise]   = useState<any>(null)
   const messagesEndRef                      = useRef<HTMLDivElement>(null)
   const inputRef                            = useRef<HTMLInputElement>(null)
   const bootedRef                           = useRef(false)
 
-  useEffect(() => {
-    fetch(`${API}/payment/publishable-key`)
-      .then(r => r.json())
-      .then(d => { if (d.publishable_key) setStripePromise(loadStripe(d.publishable_key)) })
-      .catch(() => {})
-  }, [])
-
   const scroll = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  useEffect(() => { scroll() }, [messages, loading, showStripe, payStatus, consentSigned])
+  useEffect(() => { scroll() }, [messages, loading, consentSigned])
 
   const addMessage = (role: Message['role'], text: string) => {
     setMessages(prev => {
@@ -432,7 +352,7 @@ export default function IntakePage() {
     boot()
   }, [boot])
 
-  const sendText = async (text: string) => {
+  const sendText = async (text: string, preOpenedWindow: Window | null = null) => {
     if (!text || !sessionId || status !== 'collecting' || loading) return
     addMessage('user', text)
     setInput('')
@@ -445,53 +365,82 @@ export default function IntakePage() {
       })
       const data = await res.json()
       const clean = (s: string) => (s || '').replace(/\*\*(.+?)\*\*/g, '$1')
+      const rawReply = clean(data.reply)
+      const stripeLink = extractStripeLink(rawReply)
+      const displayReply = stripeLink ? "Opening a secure payment page for your copay in a new tab…" : rawReply
 
       if (data.status === 'complete') {
-        addMessage('bot', clean(data.reply))
+        addMessage('bot', displayReply)
         setStatus('complete')
         if (data.data) setIntakeData(data.data)
         if (data.patient_id) setPatientId(data.patient_id)
-        const copay = data.data?.copay
-        if (data.payment === 'now' && copay && parseFloat(copay) > 0) {
-          setPayStatus('paying'); setShowStripe(true)
-        } else if (copay && parseFloat(copay) > 0) {
-          setPayStatus('asking')
-        } else {
-          setPayStatus('skipped')
-        }
+        setPayDecision(data.payment === 'now' ? 'now' : data.payment === 'later' ? 'later' : 'none')
       } else if (data.status === 'emergency_redirect') {
-        addMessage('error', clean(data.reply))
+        addMessage('error', displayReply)
         setStatus('emergency_redirect')
         setCurrentStep(8)
       } else if (data.status === 'staff_requested') {
-        addMessage('bot', clean(data.reply))
+        addMessage('bot', displayReply)
         setStatus('staff_requested')
       } else if (data.status === 'ended') {
         setStatus('ended')
-        // don't add JSON as a message — just silently end
       } else {
-        addMessage('bot', clean(data.reply) || 'Something went wrong.')
+        addMessage('bot', displayReply || 'Something went wrong.')
+      }
+
+      // Browsers block window.open() calls that happen after an async
+      // gap (like awaiting this fetch) — they no longer count as part of
+      // the original click, so they get treated as a blocked popup. Fix:
+      // a blank tab was already pre-opened synchronously at click time
+      // (see maybePreOpenPaymentTab below); just navigate it now that we
+      // have the real URL. Only fall back to a fresh window.open() if no
+      // tab was pre-opened (e.g. patient typed "pay now" as free text
+      // rather than clicking the button).
+      if (stripeLink) {
+        if (preOpenedWindow) {
+          preOpenedWindow.location.href = stripeLink
+        } else {
+          window.open(stripeLink, '_blank')
+        }
+      } else if (preOpenedWindow) {
+        // No link came back this turn — don't leave a blank tab open.
+        preOpenedWindow.close()
       }
     } catch {
       addMessage('error', 'Error reaching the server.')
+      if (preOpenedWindow) preOpenedWindow.close()
     } finally {
       setLoading(false)
       inputRef.current?.focus()
     }
   }
 
-  const handleSend = () => sendText(input.trim())
+  // If the last bot message is the pay-now/pay-at-clinic prompt, pre-open
+  // a blank tab synchronously — this must happen INSIDE the click handler,
+  // before any await, or the browser will block it as a popup later.
+  const maybePreOpenPaymentTab = (): Window | null => {
+    if (quickReplies.includes('Pay now')) {
+      return window.open('', '_blank')
+    }
+    return null
+  }
+
+  const handleSend = () => {
+    const preOpened = maybePreOpenPaymentTab()
+    sendText(input.trim(), preOpened)
+  }
 
   const handleQuickReply = (reply: string) => {
     const toSend = reply.replace(/^\d+\.\s*/, '')
     setQuickReplyUsed(true)
-    sendText(toSend)
+    const preOpened = maybePreOpenPaymentTab()
+    sendText(toSend, preOpened)
   }
 
   const restart = () => {
     setSessionId(null); setMessages([]); setInput('')
     setStatus('collecting'); setIntakeData(null); setPatientId(null)
-    setCurrentStep(1); setPayStatus('idle'); setShowStripe(false)
+    setCurrentStep(1); setPayDecision('none')
     setQuickReplyUsed(false); setConsentSigned(false)
     bootedRef.current = false
     boot()
@@ -501,8 +450,6 @@ export default function IntakePage() {
   const quickReplies = status === 'collecting' && !loading && !quickReplyUsed
     ? getQuickReplies(lastBotMsg) : []
 
-  // Only trigger DOB keyboard when question is specifically about date of birth
-  // not when asking about phone, email, insurance, or other topics
   const isDobQuestion = status === 'collecting' && !loading &&
     (lastBotMsg.toLowerCase().includes('date of birth') ||
      lastBotMsg.toLowerCase().includes('mm/dd/yyyy')) &&
@@ -521,8 +468,11 @@ export default function IntakePage() {
     : quickReplies.length > 0         ? 'Or type your response...'
     : 'Type a message...'
 
-  const showConsent = status === 'complete' && intakeData &&
-    (payStatus === 'paid' || payStatus === 'skipped') && !consentSigned
+  // Consent is only required when a guardian was collected during
+  // intake — meaning the patient is a minor. Adult patients never see
+  // this form.
+  const isMinor = !!(intakeData?.guardian_name && intakeData.guardian_name.trim())
+  const showConsent = status === 'complete' && intakeData && isMinor && !consentSigned
 
   return (
     <>
@@ -650,21 +600,9 @@ export default function IntakePage() {
             {status === 'complete' && intakeData && (
               <>
                 <ConfirmationCard
-                  data={intakeData} patientId={patientId} payStatus={payStatus} stripePromise={stripePromise}
-                  onPaid={() => { setPayStatus('paying'); setShowStripe(true) }}
-                  onSkip={() => setPayStatus('skipped')}
+                  data={intakeData} payDecision={payDecision}
                   onRestart={restart}
                 />
-                {(payStatus === 'paying' || showStripe) && patientId && stripePromise && intakeData.copay && (
-                  <Elements stripe={stripePromise}>
-                    <PaymentForm
-                      patientId={patientId} copay={intakeData.copay} patientName={intakeData.name}
-                      doctor={intakeData.appointment_doctor} date={intakeData.appointment_date}
-                      onPaid={() => { setPayStatus('paid'); setShowStripe(false) }}
-                      onSkip={() => { setPayStatus('skipped'); setShowStripe(false) }}
-                    />
-                  </Elements>
-                )}
                 {showConsent && (
                   <ConsentForm
                     patientName={intakeData.guardian_name || intakeData.name}

@@ -1,4 +1,4 @@
-version: '3.9'
+#version: '3.9'
 
 services:
   postgres:
@@ -35,11 +35,43 @@ services:
       hapi.fhir.server_address: http://hapi:8080/fhir
       hapi.fhir.subscription.websocket_enabled: "true"
       hapi.fhir.cors.allowed_origin: "*"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
+
+  patient-lookup:
+    build:
+      context: ./backend
+      dockerfile: mcp_servers/patient_lookup/Dockerfile
+    ports:
+      - "5001:5001"
+      - "5101:5101"
+    env_file:
+      - ./.env
+    restart: unless-stopped
+
+  eligibility:
+    build:
+      context: ./backend
+      dockerfile: mcp_servers/eligibility/Dockerfile
+    ports:
+      - "5002:5002"
+      - "5102:5102"
+    env_file:
+      - ./.env
+    restart: unless-stopped
+
+  hapi-fhir:
+    build:
+      context: ./backend
+      dockerfile: mcp_servers/hapi_fhir/Dockerfile
+    ports:
+      - "5003:5003"
+      - "5103:5103"
+    environment:
+      FHIR_BASE_URL: http://hapi:8080/fhir
+    env_file:
+      - ./.env
+    depends_on:
+      - hapi
+    restart: unless-stopped
 
 volumes:
   postgres_data:

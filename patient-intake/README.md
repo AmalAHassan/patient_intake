@@ -122,7 +122,9 @@ curl http://localhost:8080/fhir/metadata | head -5
 ```bash
 cd patient-intake
 source backend/.venv/bin/activate
-make dev
+#make dev
+cd backend
+uvicorn main:app --reload --port 8000
 ```
 
 Starts 3 MCP servers (ports 5001–5003), the crisis notifier (port 8001), and FastAPI (port 8000).
