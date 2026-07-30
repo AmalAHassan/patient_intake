@@ -64,11 +64,6 @@ function cleanBotMessage(text: string): string {
     .trim()
 }
 
-function extractStripeLink(text: string): string | null {
-  const match = text.match(/https:\/\/(?:buy|checkout)\.stripe\.com\/\S+/)
-  return match ? match[0] : null
-}
-
 function maskEmail(email: string): string {
   if (!email || !email.includes('@')) return email
   const [local, domain] = email.split('@')
@@ -352,6 +347,47 @@ export default function IntakePage() {
     boot()
   }, [boot])
 
+  // Watches the Stripe tab after payment is opened, resolving to exactly
+  // one of three outcomes:
+  //   1. Payment succeeds (confirmed by the webhook, via polling our own
+  //      backend) — shows a thank-you message.
+  //   2. The patient closes the Stripe tab without paying — detected
+  //      immediately via window.closed, no need to wait for a timeout
+  //      since we already know for certain.
+  //   3. Neither happens within a reasonable window — gives up
+  //      gracefully, payment might still succeed later on its own.
+  const pollPaymentStatus = (stripeTab: Window | null) => {
+    if (!sessionId) return
+    const POLL_INTERVAL_MS = 4000
+    const MAX_DURATION_MS  = 5 * 60 * 1000 // 5 minutes
+    const startTime = Date.now()
+
+    const intervalId = setInterval(async () => {
+      if (stripeTab && stripeTab.closed) {
+        clearInterval(intervalId)
+        addMessage('bot', 'Session ended — it looks like the payment page was closed before finishing. Please log in to the patient portal to pay, or pay at the clinic.')
+        return
+      }
+
+      try {
+        const res = await fetch(`${API}/payment/status-by-session/${sessionId}`)
+        const data = await res.json()
+        if (data.paid) {
+          clearInterval(intervalId)
+          addMessage('bot', '✓ Payment received — thank you!')
+          return
+        }
+      } catch {
+        // Network hiccup — just try again next tick, don't abandon the poll
+      }
+
+      if (Date.now() - startTime >= MAX_DURATION_MS) {
+        clearInterval(intervalId)
+        addMessage('bot', "Still waiting on payment — you can pay anytime from the patient portal.")
+      }
+    }, POLL_INTERVAL_MS)
+  }
+
   const sendText = async (text: string, preOpenedWindow: Window | null = null) => {
     if (!text || !sessionId || status !== 'collecting' || loading) return
     addMessage('user', text)
@@ -366,7 +402,10 @@ export default function IntakePage() {
       const data = await res.json()
       const clean = (s: string) => (s || '').replace(/\*\*(.+?)\*\*/g, '$1')
       const rawReply = clean(data.reply)
-      const stripeLink = extractStripeLink(rawReply)
+      // The backend now creates the payment link deterministically and
+      // sends it as its own field — no more parsing it out of the AI's
+      // reply text, since the AI never sees or generates the URL at all.
+      const stripeLink: string | null = data.payment_url || null
       const displayReply = stripeLink ? "Opening a secure payment page for your copay in a new tab…" : rawReply
 
       if (data.status === 'complete') {
@@ -397,11 +436,13 @@ export default function IntakePage() {
       // tab was pre-opened (e.g. patient typed "pay now" as free text
       // rather than clicking the button).
       if (stripeLink) {
+        let stripeTab = preOpenedWindow
         if (preOpenedWindow) {
           preOpenedWindow.location.href = stripeLink
         } else {
-          window.open(stripeLink, '_blank')
+          stripeTab = window.open(stripeLink, '_blank')
         }
+        pollPaymentStatus(stripeTab)
       } else if (preOpenedWindow) {
         // No link came back this turn — don't leave a blank tab open.
         preOpenedWindow.close()

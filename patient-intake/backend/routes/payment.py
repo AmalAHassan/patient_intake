@@ -1,17 +1,17 @@
 """
 payment.py — Stripe payment routes.
-Uses Stripe Checkout — patients are redirected to a Stripe-hosted payment
-page, so raw card data and the payment UI never touch this app at all.
 """
 import stripe
 import os
+import json
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
-from models import SessionLocal, Patient
+from models import SessionLocal, Patient, IntakeSession
 from dotenv import load_dotenv
 from datetime import datetime
 from services.sms import send_payment_receipt
+from services.mcp_client import call_tool
 
 
 for env_path in [
@@ -19,7 +19,7 @@ for env_path in [
     os.path.join(os.path.dirname(__file__), "..", ".env"),
 ]:
     if os.path.exists(env_path):
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=True)
         break
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
@@ -47,6 +47,17 @@ class PortalLookupRequest(BaseModel):
     dob: str
 
 
+class CancelAppointmentRequest(BaseModel):
+    patient_id: str
+
+
+class RescheduleConfirmRequest(BaseModel):
+    patient_id: str
+    doctor: str
+    date: str
+    time: str
+
+
 @router.post("/payment/create-checkout-session")
 async def create_checkout_session(body: CreateCheckoutRequest):
     try:
@@ -63,10 +74,6 @@ async def create_checkout_session(body: CreateCheckoutRequest):
                 "quantity": 1,
             }],
             mode="payment",
-            # {CHECKOUT_SESSION_ID} is a literal Stripe placeholder — Stripe
-            # fills it in when redirecting back, so the frontend can pass it
-            # to /payment/confirm-checkout to verify the payment actually
-            # succeeded (never trust the redirect alone).
             success_url=(
                 f"{FRONTEND_URL}/intake?payment=success"
                 f"&patient_id={body.patient_id}"
@@ -148,6 +155,7 @@ async def portal_lookup(body: PortalLookupRequest):
                     "payment_date":       getattr(p, "payment_date", None) or "",
                     "reason":             p.reason_for_visit,
                     "created_at":         p.created_at.isoformat() if p.created_at else "",
+                    "appointment_status": getattr(p, "appointment_status", "confirmed") or "confirmed",
                 }
                 for p in patients
             ]
@@ -156,42 +164,162 @@ async def portal_lookup(body: PortalLookupRequest):
         db.close()
 
 
+@router.post("/portal/cancel-appointment")
+async def cancel_appointment(body: CancelAppointmentRequest):
+    db = SessionLocal()
+    try:
+        patient = db.query(Patient).filter(Patient.id == body.patient_id).first()
+        if not patient:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        patient.appointment_status = "cancelled"
+        db.commit()
+        print(f"[portal] Cancelled appointment — patient: {patient.name} (id: {patient.id})")
+        return {"status": "cancelled"}
+    finally:
+        db.close()
+
+
+@router.get("/portal/reschedule-slots")
+async def reschedule_slots(department: str):
+    """Reuses the same fhir_get_slots logic the intake chat agent uses,
+    so reschedule shows real, current availability — not a guess."""
+    result = await call_tool("fhir_get_slots", {"department": department})
+    try:
+        parsed = json.loads(result) if isinstance(result, str) else result
+    except json.JSONDecodeError:
+        parsed = {"slots": []}
+    return parsed
+
+
+@router.post("/portal/reschedule-appointment")
+async def reschedule_appointment(body: RescheduleConfirmRequest):
+    db = SessionLocal()
+    try:
+        patient = db.query(Patient).filter(Patient.id == body.patient_id).first()
+        if not patient:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        patient.appointment_doctor = body.doctor
+        patient.appointment_date   = body.date
+        patient.appointment_time   = body.time
+        patient.appointment_status = "confirmed"
+        db.commit()
+        print(f"[portal] Rescheduled — patient: {patient.name} -> {body.doctor} on {body.date} at {body.time}")
+        return {"status": "rescheduled"}
+    finally:
+        db.close()
+
+
 @router.get("/payment/publishable-key")
 async def get_publishable_key():
     return {"publishable_key": os.getenv("STRIPE_PUBLISHABLE_KEY")}
+
+
+@router.get("/payment/status-by-session/{intake_session_id}")
+async def payment_status_by_session(intake_session_id: str):
+    """
+    Polled by the ORIGINAL intake chat tab (not the Stripe tab) to detect
+    when payment succeeds, so it can show a confirmation message without
+    needing the patient to do anything else. Resolves our own
+    intake_session_id -> the patient row created for that session -> its
+    current payment_status.
+    """
+    db = SessionLocal()
+    try:
+        session = db.query(IntakeSession).filter(
+            IntakeSession.session_id == intake_session_id
+        ).first()
+        if not session or not session.patient_id:
+            return {"paid": False, "found": False}
+
+        patient = db.query(Patient).filter(Patient.id == session.patient_id).first()
+        if not patient:
+            return {"paid": False, "found": False}
+
+        return {
+            "paid": getattr(patient, "payment_status", "") == "paid",
+            "found": True,
+        }
+    finally:
+        db.close()
+
 
 @router.post("/webhooks/stripe")
 async def stripe_webhook(request: Request):
     payload    = await request.body()
     sig_header = request.headers.get("stripe-signature")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+    print(f"[webhook] Signature header present: {bool(sig_header)}")
+    print(f"[webhook] STRIPE_WEBHOOK_SECRET set: {bool(webhook_secret)}")
+
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, os.getenv("STRIPE_WEBHOOK_SECRET")
-        )
-    except (ValueError, stripe.error.SignatureVerificationError):
-        raise HTTPException(status_code=400, detail="Invalid signature")
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except Exception as e:
+        # Broadened from (ValueError, SignatureVerificationError) — a
+        # None/missing secret raises a raw AttributeError from inside
+        # stripe's own library (calling .encode() on None) BEFORE it ever
+        # gets to a proper signature-verification error, which slipped
+        # past the narrower except clause and crashed as an unhandled 500
+        # instead of a clean 400.
+        print(f"[webhook] Verification FAILED: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature or webhook misconfigured")
+
+    print(f"[webhook] Verified event: {event['type']}")
 
     if event["type"] in ("checkout.session.completed", "payment_intent.succeeded"):
         obj = event["data"]["object"]
-        patient_id = obj.get("metadata", {}).get("patient_id")
-        if patient_id:
-            db = SessionLocal()
-            try:
-                patient = db.query(Patient).filter(Patient.id == patient_id).first()
-                if patient:
-                    patient.payment_status = "paid"
-                    patient.payment_date = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-                    db.commit()
-                    send_payment_receipt(
-                        patient_name=patient.name or "",
-                        doctor=patient.appointment_doctor or "",
-                        date=patient.appointment_date or "",
-                        time=patient.appointment_time or "",
-                        department=patient.department or "",
-                        amount=patient.copay or "0",
-                        payment_date=patient.payment_date,
-                    )
-            finally:
-                db.close()
+
+        # obj is a Stripe SDK object, not a plain dict — chaining .get()
+        # calls directly on it can trigger its custom __getattr__ lookup
+        # and raise AttributeError. Convert to a real dict first, then
+        # .get() safely on that.
+        obj_dict = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+        metadata = obj_dict.get("metadata") or {}
+
+        # Our Payment Link attaches metadata.session_id (our OWN intake
+        # session ID) — NOT patient_id, since patient_id doesn't exist
+        # yet at the moment the payment link is created (it's generated
+        # afterward, once intake completes). Resolve session -> patient
+        # here instead.
+        intake_session_id = metadata.get("session_id")
+        print(f"[webhook] metadata.session_id: {intake_session_id}")
+
+        if not intake_session_id:
+            print("[webhook] No session_id in metadata — cannot resolve patient, skipping")
+            return {"status": "ok"}
+
+        db = SessionLocal()
+        try:
+            intake_session = db.query(IntakeSession).filter(
+                IntakeSession.session_id == intake_session_id
+            ).first()
+
+            if not intake_session or not intake_session.patient_id:
+                print(f"[webhook] No matching IntakeSession/patient_id for session_id: {intake_session_id}")
+                return {"status": "ok"}
+
+            patient = db.query(Patient).filter(
+                Patient.id == intake_session.patient_id
+            ).first()
+
+            if patient:
+                patient.payment_status = "paid"
+                patient.payment_date = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+                db.commit()
+                print(f"[webhook] Marked paid — patient: {patient.name} (id: {patient.id})")
+
+                send_payment_receipt(
+                    patient_name=patient.name or "",
+                    doctor=patient.appointment_doctor or "",
+                    date=patient.appointment_date or "",
+                    time=patient.appointment_time or "",
+                    department=patient.department or "",
+                    amount=patient.copay or "0",
+                    payment_date=patient.payment_date,
+                )
+            else:
+                print(f"[webhook] IntakeSession found but Patient row missing for id: {intake_session.patient_id}")
+        finally:
+            db.close()
 
     return {"status": "ok"}

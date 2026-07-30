@@ -1,5 +1,18 @@
 """
 claude.py — Conversational intake loop, orchestrated across scoped agents.
+
+Payment is no longer handled via Claude calling Stripe's MCP tools inside
+the model loop. The payment agent just records the patient's choice
+("now"/"later"); if "now", this file calls create_payment_link_via_mcp()
+directly — a deterministic backend call to Stripe's real remote MCP
+server, with zero AI involvement in that specific step.
+
+temperature=0.2 is set on both model calls (main loop + reflection) —
+these agents follow a structured script rather than doing creative
+writing, so a low temperature makes them far more likely to follow the
+same instruction the same way every time, instead of the default 1.0
+producing "sometimes it asks a question first, sometimes it doesn't"
+variance for the exact same situation.
 """
 import json
 import os
@@ -11,6 +24,7 @@ from anthropic import Anthropic
 from config import settings
 from services.mcp_client import call_tool
 from services.sms import send_appointment_confirmation
+from services.stripe_mcp import create_payment_link_via_mcp
 from services import orchestrator
 
 CRISIS_NOTIFIER_URL = os.getenv("CRISIS_NOTIFIER_URL", "http://localhost:8001")
@@ -21,17 +35,7 @@ anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
 MODEL               = "claude-haiku-4-5"
 MAX_TOOL_ITERATIONS = 10
 MAX_LOOKUP_RETRIES  = 3
-
-STRIPE_MCP_KEY = os.getenv("STRIPE_MCP_RESTRICTED_KEY")
-
-MCP_SERVERS = [
-    {
-        "type": "url",
-        "url": "https://mcp.stripe.com",
-        "name": "stripe",
-        "authorization_token": STRIPE_MCP_KEY,
-    },
-]
+TEMPERATURE         = 0.2
 
 # Full tool list — orchestrator.get_tools_for_agent() scopes this down to
 # just what the currently active agent is allowed to call.
@@ -112,23 +116,6 @@ TOOLS = [
     },
 ]
 
-# Not part of TOOLS itself (it has no "name" key, so get_tools_for_agent
-# would crash trying to filter it) — appended dynamically in chat() only
-# when the active agent is flagged use_stripe_mcp in orchestrator.py.
-#
-# Wide open — every tool Stripe's remote MCP server exposes is available.
-# Restricting this to a single named tool via "configs" was tried and
-# reverted: it changed execution from server-side-automatic (mcp_tool_use)
-# to client-handled (plain tool_use), which our code doesn't implement,
-# causing silent failures. Wide-open means Claude may use the slower
-# generic discovery chain (planner -> search -> details -> write, ~20s),
-# but it's the configuration that reliably produces real, working links.
-STRIPE_TOOLSET = {
-    "type": "mcp_toolset",
-    "mcp_server_name": "stripe",
-    "default_config": {"enabled": True, "defer_loading": False},
-}
-
 REFLECTION_PROMPT = """You are a silent quality checker for a medical intake AI.
 
 Check the DRAFT RESPONSE against these rules:
@@ -169,6 +156,7 @@ async def _reflect(draft: str, history: list) -> str:
         reflection_response = anthropic_client.messages.create(
             model=MODEL,
             max_tokens=300,
+            temperature=TEMPERATURE,
             system=[
                 {
                     "type": "text",
@@ -275,11 +263,7 @@ def _strip_leaked_reasoning(text: str) -> str:
     """
     Fast pattern-based filter applied to EVERY agent turn. Two passes:
     1. Sentence-level narration removal — strips only the narrating
-       sentences ("let me use the planner...", "I need to resolve
-       internally...") while keeping the rest of the message intact, since
-       useful content (like a real payment link) can appear in the same
-       reply right after the narration. A whole-message wipe would throw
-       that away too.
+       sentences while keeping the rest of the message intact.
     2. Whole-message wipe — only for leaked content that never co-occurs
        with anything useful (e.g. a full leaked emergency-check
        checklist), where dropping the entire message is safe.
@@ -287,16 +271,10 @@ def _strip_leaked_reasoning(text: str) -> str:
     if not text:
         return text
 
-    # Strip explicit thinking tags and everything inside them
     text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-
-    # Strip stray markdown code fences the model sometimes wraps JSON
-    # signals in, despite being told not to — this is a safety net on top
-    # of the SHARED_PREAMBLE instruction forbidding it.
     text = re.sub(r"```json", "", text, flags=re.IGNORECASE)
     text = re.sub(r"```", "", text).strip()
 
-    # Pass 1: remove individual narration sentences, keep the rest
     narration_markers = [
         "let me create", "let me use", "let me look up", "let me get",
         "i see there's a question", "resolve internally", "finalize the approach",
@@ -307,8 +285,6 @@ def _strip_leaked_reasoning(text: str) -> str:
     sentences = [s for s in sentences if not any(m in s.lower() for m in narration_markers)]
     text = " ".join(sentences).strip()
 
-    # Pass 2: whole-message wipe, only for leaks that never carry useful
-    # content alongside them
     lower = text.lower()
     whole_wipe_markers = [
         "according to my instructions", "emergency check:", "department alignment check:",
@@ -318,74 +294,6 @@ def _strip_leaked_reasoning(text: str) -> str:
         return ""
 
     return text
-
-
-_FAKE_LINK_MARKERS = ["stripe.com/pay", "stripe.com/checkout", "stripe.com/payment"]
-_REAL_STRIPE_LINK_RE = re.compile(r"https://(?:buy|checkout)\.stripe\.com/\S+")
-
-
-def _contains_fabricated_stripe_link(text: str) -> bool:
-    """
-    Code-level safety net: the model has, more than once, written a
-    plausible-looking but FAKE Stripe URL (e.g. 'stripe.com/pay') instead
-    of actually invoking the Stripe MCP tool. Prompt instructions alone
-    haven't fully stopped this. This catches it deterministically — if
-    the text mentions stripe.com at all but doesn't contain a real
-    buy.stripe.com/checkout.stripe.com link, treat it as fabricated.
-    """
-    if "stripe.com" not in text.lower():
-        return False
-    return _REAL_STRIPE_LINK_RE.search(text) is None
-
-
-def _is_payment_agent_stalling(text: str, tool_used_this_turn: bool) -> bool:
-    """
-    Two recurring patterns despite prompt instructions:
-    1. Asking an implementation-detail question (e.g. "would you like a
-       click-once link or email delivery?") instead of just calling the
-       Stripe tool with sensible defaults.
-    2. Narrating an INTENTION to use Stripe ("I'll use the Stripe API to
-       generate a payment link...") without ever actually calling a tool
-       or including a real link — a declarative version of the same
-       stall, which doesn't end in "?" so the question-based check alone
-       wouldn't catch it, and doesn't mention "stripe.com" so the
-       fabricated-link check wouldn't catch it either.
-    Either way: if the tool wasn't actually invoked this turn, force it
-    to proceed instead of talking around the action.
-    """
-    if tool_used_this_turn:
-        return False
-    lower = text.lower()
-    if text.strip().endswith("?"):
-        stall_markers = [
-            "payment link", "payment option", "which payment", "sent to your email",
-            "click once", "click-once", "patient portal or email", "would you prefer",
-        ]
-        if any(m in lower for m in stall_markers):
-            return True
-    narration_without_action_markers = [
-        "i'll use the stripe", "i can help you with a payment link",
-        "let me search for how", "don't have a direct payment link tool",
-        "based on the stripe documentation",
-    ]
-    return any(m in lower for m in narration_without_action_markers)
-
-
-def _payment_now_missing_link(text: str) -> bool:
-    """
-    Distinct failure from stalling/fabrication: the Stripe tool can
-    genuinely SUCCEED (a real payment link is created server-side, visible
-    in the tool result), but the model sometimes skips actually
-    communicating that URL to the patient and jumps straight to the
-    completion JSON. If the completion signals "payment": "now" (patient
-    chose to pay online) but no real stripe.com link appears ANYWHERE in
-    the text, the link was created but never delivered — that's still a
-    failure from the patient's perspective (nothing to click), even
-    though the tool technically worked.
-    """
-    if '"payment": "now"' not in text and "'payment': 'now'" not in text:
-        return False
-    return _REAL_STRIPE_LINK_RE.search(text) is None
 
 
 _TIME_RE = re.compile(r"\d{1,2}:\d{2}\s*(am|pm)", re.IGNORECASE)
@@ -399,22 +307,41 @@ _SLOT_CONTEXT_RE = re.compile(
 
 def _is_scheduling_agent_fabricating(text: str, tool_used_this_turn: bool) -> bool:
     """
-    Same class of problem as the Stripe stall/fabrication checks: despite
-    explicit prompt instructions, the scheduling agent has repeatedly
-    asked preference questions ("morning or afternoon?") or presented
-    slot-shaped content (doctor names, specific dates/times) WITHOUT
-    actually calling fhir_get_slots first — meaning it's hallucinating
-    data rather than using the real tool. If both a clock time AND a
-    doctor/weekday/month mention appear together, but the tool was never
-    called this turn, treat it as fabricated. Deliberately lenient about
-    exact phrasing/punctuation (commas after weekdays, doctor name before
-    or after the time, etc.) rather than requiring one rigid format.
+    Despite explicit prompt instructions, the scheduling agent has
+    repeatedly asked preference questions or presented slot-shaped
+    content (doctor names, specific dates/times) WITHOUT actually calling
+    fhir_get_slots first — meaning it's hallucinating data rather than
+    using the real tool. If both a clock time AND a doctor/weekday/month
+    mention appear together, but the tool was never called this turn,
+    treat it as fabricated.
     """
     if tool_used_this_turn:
         return False
     if not _TIME_RE.search(text):
         return False
     return bool(_SLOT_CONTEXT_RE.search(text))
+
+
+_SCHEDULING_PREFERENCE_STALL_MARKERS = [
+    "what day works best", "what day or time works", "which day works",
+    "what time works best", "when works best", "do you have a preference",
+]
+
+
+def _is_scheduling_agent_asking_before_tool(text: str, tool_used_this_turn: bool) -> bool:
+    """
+    Milder companion to _is_scheduling_agent_fabricating — that one only
+    catches SPECIFIC invented slot data (a time + doctor name together).
+    This catches the more common, milder failure: asking a day/time
+    preference question BEFORE ever calling fhir_get_slots, even when no
+    fabricated data is stated at all. SCHEDULING_PROMPT explicitly
+    forbids this with a WRONG example, but it still slips through
+    sometimes — this is a deterministic backstop for that exact pattern.
+    """
+    if tool_used_this_turn:
+        return False
+    lower = text.lower()
+    return any(m in lower for m in _SCHEDULING_PREFERENCE_STALL_MARKERS)
 
 
 _ROUTING_STRAYING_MARKERS = [
@@ -426,14 +353,10 @@ _ROUTING_STRAYING_MARKERS = [
 
 def _is_routing_agent_straying_into_scheduling(text: str) -> bool:
     """
-    Recurring failure: after collecting department + reason (sometimes
-    plus an ad-hoc referral check), the routing agent — which has ZERO
-    tools — starts asking scheduling-flavored questions itself ("which
-    day or time works best?") instead of immediately handing off to the
-    scheduling agent. Since routing can't call fhir_get_slots at all,
-    this always dead-ends once the patient actually answers. If routing
-    asks a scheduling-shaped question without emitting a redirect, that's
-    the bug — reject it and force the handoff instead.
+    Recurring failure: after collecting department + reason, the routing
+    agent — which has ZERO tools — starts asking scheduling-flavored
+    questions itself instead of immediately handing off to the
+    scheduling agent.
     """
     lower = text.lower()
     return any(m in lower for m in _ROUTING_STRAYING_MARKERS)
@@ -446,13 +369,9 @@ def _extract_redirect(text: str) -> tuple[dict | None, str]:
     """
     Finds and parses a {"redirect": ...} JSON signal anywhere in the text
     (not just at the very end — a naive slice-to-end-of-string approach
-    broke once when the model wrapped the JSON in markdown code fences,
-    since everything after the JSON, including the closing ```, got
-    included in the slice and broke json.loads()).
+    broke once when the model wrapped the JSON in markdown code fences).
 
     Returns (parsed_dict_or_None, remaining_text_with_redirect_removed).
-    Also strips any leftover markdown fence remnants around where the
-    JSON used to sit.
     """
     match = _REDIRECT_JSON_RE.search(text)
     if not match:
@@ -483,8 +402,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
     assistant_text = ""
     reply_segments = []
     lookup_count   = 0
-    stripe_tool_used_this_turn = False
-    slots_tool_used_this_turn  = False
+    slots_tool_used_this_turn = False
 
     for _ in range(MAX_TOOL_ITERATIONS):
         active_agent = orchestrator.get_active_agent(state)
@@ -492,13 +410,10 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
         system       = orchestrator.build_system_prompt(active_agent)
         scoped_tools = orchestrator.get_tools_for_agent(active_agent, TOOLS)
 
-        uses_stripe = orchestrator.agent_uses_stripe(active_agent)
-        if uses_stripe:
-            scoped_tools = scoped_tools + [STRIPE_TOOLSET]
-
-        call_kwargs = dict(
+        response = anthropic_client.messages.create(
             model=MODEL,
             max_tokens=1024,
+            temperature=TEMPERATURE,
             system=[
                 {
                     "type": "text",
@@ -509,13 +424,6 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
             messages=history,
             tools=scoped_tools,
         )
-
-        if uses_stripe:
-            call_kwargs["mcp_servers"] = MCP_SERVERS
-            call_kwargs["betas"] = ["mcp-client-2025-11-20"]
-            response = anthropic_client.beta.messages.create(**call_kwargs)
-        else:
-            response = anthropic_client.messages.create(**call_kwargs)
 
         if response.stop_reason != "tool_use":
             turn_text = " ".join(
@@ -530,10 +438,6 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
             if parsed_redirect is not None:
                 target = parsed_redirect.get("redirect")
                 if target == active_agent:
-                    # Self-redirect — this is never valid, and left
-                    # unchecked it silently loops forever with no
-                    # patient-facing text until MAX_TOOL_ITERATIONS is
-                    # exhausted (exactly what happened in production).
                     print(f"[orchestrator] REJECTED self-redirect: {active_agent} -> {active_agent}")
                     history.append({"role": "assistant", "content": turn_text_without_redirect})
                     history.append({
@@ -560,59 +464,45 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                 handled_redirect = True
 
             if turn_text:
-                is_fake_link = _contains_fabricated_stripe_link(turn_text)
-                is_stalling  = (
-                    orchestrator.agent_uses_stripe(active_agent)
-                    and _is_payment_agent_stalling(turn_text, stripe_tool_used_this_turn)
-                )
                 is_fabricated_slots = (
                     active_agent == "scheduling"
                     and _is_scheduling_agent_fabricating(turn_text, state.get("slots_ever_called", False))
+                )
+                is_asking_before_tool = (
+                    active_agent == "scheduling"
+                    and not handled_redirect
+                    and not state.get("slots_ever_called", False)
+                    and _is_scheduling_agent_asking_before_tool(turn_text, state.get("slots_ever_called", False))
                 )
                 is_routing_straying = (
                     active_agent == "routing"
                     and not handled_redirect
                     and _is_routing_agent_straying_into_scheduling(turn_text)
                 )
-                is_missing_link = (
-                    active_agent == "payment"
-                    and _payment_now_missing_link(turn_text)
-                )
-                if is_fake_link or is_stalling or is_fabricated_slots or is_routing_straying or is_missing_link:
-                    if is_fake_link:
-                        reason = "fabricated link"
-                    elif is_stalling:
-                        reason = "stalling question instead of acting"
-                    elif is_fabricated_slots:
+                if is_fabricated_slots or is_asking_before_tool or is_routing_straying:
+                    if is_fabricated_slots:
                         reason = "fabricated slots without calling fhir_get_slots"
-                    elif is_routing_straying:
-                        reason = "routing asking scheduling questions instead of handing off"
+                    elif is_asking_before_tool:
+                        reason = "asking day/time preference before calling fhir_get_slots"
                     else:
-                        reason = "completed without ever including the payment link"
-                    print(f"[stripe] REJECTED ({reason}): {turn_text[:150]}")
+                        reason = "routing asking scheduling questions instead of handing off"
+                    print(f"[orchestrator] REJECTED ({reason}): {turn_text[:150]}")
                     history.append({"role": "assistant", "content": turn_text})
-                    if is_fake_link:
-                        correction = (
-                            "That link is not valid — you did not actually call the "
-                            "Stripe tool. Do not write out any stripe.com URL yourself. "
-                            "Call the Stripe tool now and use ONLY the exact URL it "
-                            "returns in its result."
-                        )
-                    elif is_stalling:
-                        correction = (
-                            "Do not ask the patient any implementation questions about "
-                            "how the payment link is delivered. Use sensible defaults "
-                            "(a standard one-time payment link) and call the Stripe "
-                            "tool now — do not ask anything further."
-                        )
-                    elif is_fabricated_slots:
+                    if is_fabricated_slots:
                         correction = (
                             "You mentioned specific doctors, dates, or times without "
                             "actually calling fhir_get_slots. Do not invent slot data. "
                             "Call fhir_get_slots now with the department, then present "
                             "ONLY the real results it returns."
                         )
-                    elif is_routing_straying:
+                    elif is_asking_before_tool:
+                        correction = (
+                            "Call fhir_get_slots now, with just the department — do not "
+                            "ask the patient for a day/time preference first. Show "
+                            "whatever real slots it returns; THEN you can ask if they'd "
+                            "like something different."
+                        )
+                    else:
                         correction = (
                             "You are the routing agent — you have no scheduling tools "
                             "and cannot show appointment times or availability. You "
@@ -621,35 +511,18 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                             "output ONLY the redirect JSON to hand off to scheduling "
                             "now: {\"redirect\": \"scheduling\", \"reason\": \"routing complete\"}"
                         )
-                    else:
-                        correction = (
-                            "You already successfully created a real payment link — "
-                            "look at the tool result from earlier in this conversation "
-                            "and find the exact URL it returned. You jumped straight to "
-                            "the completion JSON without ever telling the patient that "
-                            "URL. Output ONE short message containing that exact link "
-                            "and an instruction to click it, THEN output the completion "
-                            "JSON — do not omit the link this time."
-                        )
                     history.append({"role": "user", "content": correction})
                     continue
                 reply_segments.append(turn_text)
                 history.append({"role": "assistant", "content": turn_text})
 
             if handled_redirect:
-                # Continue immediately with the newly active agent, same
-                # turn — no extra message from the patient needed just to
-                # move the conversation forward.
                 continue
 
             # Circuit breaker: routing has repeatedly failed to emit its
-            # required redirect in several different ways (silent
-            # acknowledgment with no JSON, drifting into scheduling's job,
-            # even going completely blank) — none of which match a single
-            # detectable bad phrase. Rather than chase every new variant,
-            # force forward progress deterministically: if routing
-            # completes 2 turns in a row without actually redirecting,
-            # advance the state ourselves regardless of what was said.
+            # required redirect in several different ways. Rather than
+            # chase every new variant, force forward progress
+            # deterministically after 2 stalled turns.
             if active_agent == "routing":
                 stall_count = state.get("routing_turns_without_redirect", 0) + 1
                 state["routing_turns_without_redirect"] = stall_count
@@ -666,19 +539,11 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
         for block in response.content:
             block_type = getattr(block, "type", "")
             block_name = getattr(block, "name", "")
-            if block_type == "mcp_tool_use":
-                print(f"[stripe] MCP tool called: {block_name} — input: {block.input}")
-                stripe_tool_used_this_turn = True
-            elif block_type == "mcp_tool_result":
-                print(f"[stripe] MCP tool result — is_error={block.is_error}: {str(block.content)[:200]}")
-            elif block_type == "tool_use" and block_name == "fhir_get_slots":
+            if block_type == "tool_use" and block_name == "fhir_get_slots":
                 print(f"[scheduling] fhir_get_slots called — input: {block.input}")
                 slots_tool_used_this_turn = True
                 state["slots_ever_called"] = True
             elif block_type == "tool_use":
-                # Catch-all for every OTHER tool call (fhir_create_patient,
-                # lookup_patient, check_eligibility, etc.) so nothing is a
-                # silent blind spot in the logs anymore.
                 print(f"[tool] {active_agent} called {block_name} — input: {block.input}")
 
         for block in response.content:
@@ -716,10 +581,6 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
     redis_client.setex(history_key, 86400, json.dumps(history))
 
     if not assistant_text and reply_segments:
-        # Loop exhausted MAX_TOOL_ITERATIONS without ever landing on a
-        # final plain reply (e.g. kept redirecting agent to agent), but
-        # real patient-facing text was accumulated along the way — use it
-        # instead of silently discarding it.
         assistant_text = " ".join(reply_segments).strip()
 
     if not assistant_text:
@@ -770,13 +631,37 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                         f" on {data.get('appointment_date', '')} at {data.get('appointment_time', '')}."
                         " You're all set — see you soon! ✓"
                     )
+
+                payment_choice = parsed.get("payment", "later")
+                payment_url = None
+
+                copay_str = data.get("copay", "0")
+                try:
+                    copay_cents = int(round(float(copay_str) * 100))
+                except (ValueError, TypeError):
+                    copay_cents = 0
+
+                if payment_choice == "now" and copay_cents > 0:
+                    description = (
+                        f"{data.get('department', 'Visit')} copay - "
+                        f"{data.get('appointment_doctor', '')} "
+                        f"{data.get('appointment_date', '')}".strip()
+                    )
+                    link_result = await create_payment_link_via_mcp(copay_cents, description, session_id)
+                    if "url" in link_result:
+                        payment_url = link_result["url"]
+                    else:
+                        print(f"[stripe] Payment link creation failed, falling back to 'later': {link_result.get('error')}")
+                        payment_choice = "later"
+
                 result.update({
-                    "reply":   friendly,
-                    "status":  "complete",
-                    "data":    data,
-                    "payment": parsed.get("payment", "later"),
+                    "reply":       friendly,
+                    "status":      "complete",
+                    "data":        data,
+                    "payment":     payment_choice,
+                    "payment_url": payment_url,
                 })
-                print(f"[intake] Payment decision: {parsed.get('payment', 'later')} — copay: {data.get('copay', '0')}")
+                print(f"[intake] Payment decision: {payment_choice} — copay: {data.get('copay', '0')}")
                 redis_client.setex(collected_key, 86400, json.dumps(data))
                 to_number = os.getenv("TWILIO_TO_NUMBER", data.get("phone", ""))
                 send_appointment_confirmation(
@@ -798,53 +683,6 @@ def _block_to_dict(block) -> dict:
         return {"type": "text", "text": block.text}
     if block.type == "tool_use":
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
-    if block.type == "mcp_tool_use":
-        return {
-            "type": "mcp_tool_use",
-            "id": block.id,
-            "name": block.name,
-            "server_name": block.server_name,
-            "input": block.input,
-        }
-    if block.type == "mcp_tool_result":
-        # block.content isn't a plain string — it's a list of SDK objects
-        # (e.g. BetaTextBlock) that json.dumps() can't serialize directly.
-        # Extract just the text out of each item before storing.
-        #
-        # These can be VERY large — Stripe's discovery tools
-        # (stripe_api_search, stripe_api_details) return chunks of raw
-        # OpenAPI documentation, sometimes thousands of characters. The
-        # model only needs the FULL text in the turn where it's actually
-        # deciding what to do next; once that decision is made, this
-        # content just sits in history getting resent (and billed as
-        # input tokens) on every subsequent turn for the rest of the
-        # conversation. Truncate what gets STORED — the model already
-        # used the full version to make its immediate next move.
-        MAX_STORED_TOOL_RESULT_CHARS = 500
-        raw_content = block.content
-        if isinstance(raw_content, list):
-            serializable_content = [
-                {
-                    "type": "text",
-                    "text": (
-                        item.text[:MAX_STORED_TOOL_RESULT_CHARS] + "... [truncated for storage]"
-                        if len(item.text) > MAX_STORED_TOOL_RESULT_CHARS else item.text
-                    ),
-                } if hasattr(item, "text") else str(item)[:MAX_STORED_TOOL_RESULT_CHARS]
-                for item in raw_content
-            ]
-        else:
-            text = str(raw_content)
-            serializable_content = (
-                text[:MAX_STORED_TOOL_RESULT_CHARS] + "... [truncated for storage]"
-                if len(text) > MAX_STORED_TOOL_RESULT_CHARS else text
-            )
-        return {
-            "type": "mcp_tool_result",
-            "tool_use_id": block.tool_use_id,
-            "is_error": block.is_error,
-            "content": serializable_content,
-        }
     return {"type": block.type}
 
 

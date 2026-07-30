@@ -99,11 +99,6 @@ def test_routing_agent_has_no_tools():
     assert orchestrator.AGENTS["routing"]["tools"] == []
 
 
-def test_agent_uses_stripe_only_true_for_payment():
-    assert orchestrator.agent_uses_stripe("payment") is True
-    assert orchestrator.agent_uses_stripe("scheduling") is False
-    assert orchestrator.agent_uses_stripe("identity") is False
-
 
 def test_build_system_prompt_includes_agent_specific_instructions():
     prompt = orchestrator.build_system_prompt("scheduling")

@@ -2,20 +2,7 @@ import { useState } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 
-export default function HomePage() {
-  const [chatOpen, setChatOpen] = useState(false)
-  const router = useRouter()
-
-  const noop = (e: React.MouseEvent) => e.preventDefault()
-
-  return (
-    <>
-      <Head>
-        <title>Lea Medical Center</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
-      </Head>
-
-      <style>{`
+const PAGE_STYLES = `
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Inter', sans-serif; background: #fff; color: #0a1628; overflow-x: hidden; }
 
@@ -271,7 +258,28 @@ export default function HomePage() {
           .launcher-text { display: none; }
           .launcher { padding: 14px; border-radius: 50%; }
         }
-      `}</style>
+`
+
+export default function HomePage() {
+  const [chatOpen, setChatOpen] = useState(false)
+  const router = useRouter()
+
+  const noop = (e: React.MouseEvent) => e.preventDefault()
+
+  return (
+    <>
+      <Head>
+        <title>Lea Medical Center</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
+      </Head>
+
+      {/* Using dangerouslySetInnerHTML instead of a JSX text child avoids
+          a server/client hydration text-mismatch: React reconciles a
+          bare <style>{`...`}</style> tag's content as a text node, and
+          large template literals can get processed slightly differently
+          between the SSR pass and client hydration. Setting innerHTML
+          directly bypasses that reconciliation entirely. */}
+      <style dangerouslySetInnerHTML={{ __html: PAGE_STYLES }} />
 
       {/* Top bar */}
       <div className="top-bar">

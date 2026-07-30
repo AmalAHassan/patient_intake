@@ -101,6 +101,7 @@ async def send_message(request: MessageRequest, req: Request):
                 "patient_id": patient_id,
                 "fhir_id": fhir_id,
                 "payment": response.get("payment", "later"),
+                "payment_url": response.get("payment_url"),
             }
 
         return {

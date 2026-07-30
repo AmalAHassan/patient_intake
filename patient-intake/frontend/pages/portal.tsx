@@ -19,6 +19,13 @@ interface Appointment {
   payment_date: string
   reason: string
   created_at: string
+  appointment_status: string // "confirmed" | "cancelled"
+}
+
+interface Slot {
+  doctor: string
+  date: string
+  time: string
 }
 
 function PaymentForm({ appointment, onPaid }: { appointment: Appointment; onPaid: () => void }) {
@@ -105,23 +112,136 @@ function PaymentForm({ appointment, onPaid }: { appointment: Appointment; onPaid
   )
 }
 
-function AppointmentCard({ apt, stripePromise, onPaid }: {
+function RescheduleSlots({ apt, onDone, onCancel }: {
+  apt: Appointment; onDone: () => void; onCancel: () => void
+}) {
+  const [slots, setSlots] = useState<Slot[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState<Slot | null>(null)
+
+  useEffect(() => {
+    fetch(`${API}/portal/reschedule-slots?department=${encodeURIComponent(apt.department)}`)
+      .then(r => r.json())
+      .then(d => setSlots((d.slots || []).slice(0, 5)))
+      .catch(() => setError('Could not load available times.'))
+      .finally(() => setLoading(false))
+  }, [apt.department])
+
+  const confirmReschedule = async (slot: Slot) => {
+    setConfirming(slot)
+    try {
+      await fetch(`${API}/portal/reschedule-appointment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          patient_id: apt.patient_id,
+          doctor: slot.doctor,
+          date: slot.date,
+          time: slot.time,
+        }),
+      })
+      onDone()
+    } catch {
+      setError('Could not reschedule — please try again.')
+      setConfirming(null)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 14, borderTop: '0.5px solid #e2ddd6', paddingTop: 14 }}>
+      <div style={{ fontSize: 12, color: '#8a8880', marginBottom: 10 }}>
+        Choose a new time for {apt.department}:
+      </div>
+      {loading && <div style={{ fontSize: 13, color: '#8a8880' }}>Loading available times...</div>}
+      {error && <div style={{ fontSize: 12, color: '#c04020', marginBottom: 8 }}>{error}</div>}
+      {!loading && slots.length === 0 && !error && (
+        <div style={{ fontSize: 13, color: '#8a8880' }}>No available slots found right now.</div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {slots.map((s, i) => (
+          <button
+            key={i}
+            onClick={() => confirmReschedule(s)}
+            disabled={!!confirming}
+            style={{
+              textAlign: 'left', padding: '9px 14px', borderRadius: 8,
+              border: '1px solid #e2ddd6',
+              background: confirming === s ? '#e0f0ea' : '#fafaf8',
+              color: '#1a1916', fontSize: 13, cursor: confirming ? 'not-allowed' : 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            {s.doctor} — {s.date} at {s.time}
+          </button>
+        ))}
+      </div>
+      <button
+        onClick={onCancel}
+        style={{
+          marginTop: 10, fontSize: 12, color: '#8a8880', background: 'none',
+          border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+        }}
+      >
+        Never mind
+      </button>
+    </div>
+  )
+}
+
+function AppointmentCard({ apt, stripePromise, onPaid, onChanged }: {
   apt: Appointment
   stripePromise: any
   onPaid: () => void
+  onChanged: () => void
 }) {
   const [showPay, setShowPay] = useState(false)
+  const [showReschedule, setShowReschedule] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState('')
   const paid = apt.payment_status === 'paid'
+  const cancelled = apt.appointment_status === 'cancelled'
+
+  const handleCancel = async () => {
+    if (!window.confirm(`Cancel your appointment with ${apt.appointment_doctor} on ${apt.appointment_date}?`)) return
+    setCancelling(true)
+    setCancelError('')
+    try {
+      const res = await fetch(`${API}/portal/cancel-appointment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient_id: apt.patient_id }),
+      })
+      if (!res.ok) {
+        const body = await res.text()
+        console.error('[portal] Cancel failed:', res.status, body)
+        setCancelError(`Could not cancel (server said: ${res.status}). Check the backend terminal for details.`)
+        return
+      }
+      onChanged()
+    } catch (e) {
+      console.error('[portal] Cancel request failed:', e)
+      setCancelError('Could not reach the server — is the backend running?')
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   return (
     <div style={{
       background: '#fff', border: '0.5px solid #e2ddd6',
       borderRadius: 12, padding: '18px 22px', marginBottom: 12,
+      opacity: cancelled ? 0.6 : 1,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1916', marginBottom: 4 }}>
             {apt.appointment_doctor}
+            {cancelled && (
+              <span style={{ fontSize: 11, color: '#c04020', marginLeft: 8, fontWeight: 500 }}>
+                Cancelled
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 13, color: '#8a8880' }}>
             {apt.appointment_date} · {apt.appointment_time} · {apt.department}
@@ -157,13 +277,13 @@ function AppointmentCard({ apt, stripePromise, onPaid }: {
         </div>
       </div>
 
-      {!paid && apt.copay && parseFloat(apt.copay) > 0 && (
+      {!cancelled && !paid && apt.copay && parseFloat(apt.copay) > 0 && (
         <>
           {!showPay ? (
             <button
               onClick={() => setShowPay(true)}
               style={{
-                marginTop: 14, padding: '8px 18px', borderRadius: 8,
+                marginTop: 14, marginRight: 8, padding: '8px 18px', borderRadius: 8,
                 background: 'transparent', border: '0.5px solid #0d6b52',
                 color: '#0d6b52', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
               }}
@@ -176,6 +296,48 @@ function AppointmentCard({ apt, stripePromise, onPaid }: {
             </Elements>
           )}
         </>
+      )}
+
+      {!cancelled && !showReschedule && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setShowReschedule(true)}
+              style={{
+                padding: '8px 18px', borderRadius: 8,
+                background: 'transparent', border: '0.5px solid #8a8880',
+                color: '#4a4845', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              Reschedule
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              style={{
+                padding: '8px 18px', borderRadius: 8,
+                background: 'transparent', border: '0.5px solid #c04020',
+                color: '#c04020', fontSize: 13,
+                cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              {cancelling ? 'Cancelling...' : 'Cancel appointment'}
+            </button>
+          </div>
+          {cancelError && (
+            <div style={{ fontSize: 12, color: '#c04020', marginTop: 8 }}>
+              {cancelError}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showReschedule && (
+        <RescheduleSlots
+          apt={apt}
+          onDone={() => { setShowReschedule(false); onChanged() }}
+          onCancel={() => setShowReschedule(false)}
+        />
       )}
     </div>
   )
@@ -234,7 +396,7 @@ export default function PortalPage() {
   }
 
   const totalUnpaid = appointments
-    .filter(a => a.payment_status !== 'paid' && a.copay && parseFloat(a.copay) > 0)
+    .filter(a => a.appointment_status !== 'cancelled' && a.payment_status !== 'paid' && a.copay && parseFloat(a.copay) > 0)
     .reduce((sum, a) => sum + parseFloat(a.copay), 0)
 
   return (
@@ -267,7 +429,7 @@ export default function PortalPage() {
           </div>
           <div style={{ fontSize: 11, color: '#8a8880' }}>Ledelsea · Secure · HIPAA compliant</div>
         </div>
-        
+
         <div style={{ maxWidth: 600, margin: '0 auto', padding: '40px 24px' }}>
 
           {!loggedIn ? (
@@ -279,7 +441,7 @@ export default function PortalPage() {
                 View your statements
               </div>
               <div style={{ fontSize: 14, color: '#8a8880', marginBottom: 28 }}>
-                Enter your name and date of birth to access your appointment history and pay any outstanding balances.
+                Enter your name and date of birth to access your appointment history, pay any outstanding balances, or cancel/reschedule.
               </div>
 
               <div style={{ marginBottom: 16 }}>
@@ -348,7 +510,7 @@ export default function PortalPage() {
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 500, color: '#b06a10' }}>Outstanding balance</div>
                     <div style={{ fontSize: 12, color: '#c8901a', marginTop: 2 }}>
-                      {appointments.filter(a => a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length} unpaid copay{appointments.filter(a => a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length !== 1 ? 's' : ''}
+                      {appointments.filter(a => a.appointment_status !== 'cancelled' && a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length} unpaid copay{appointments.filter(a => a.appointment_status !== 'cancelled' && a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length !== 1 ? 's' : ''}
                     </div>
                   </div>
                   <div style={{ fontSize: 22, fontWeight: 600, color: '#b06a10' }}>
@@ -373,6 +535,7 @@ export default function PortalPage() {
                   apt={apt}
                   stripePromise={stripePromise}
                   onPaid={refresh}
+                  onChanged={refresh}
                 />
               ))}
 

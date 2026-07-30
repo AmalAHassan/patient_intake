@@ -234,10 +234,10 @@ with the department. Do this BEFORE asking the patient any preference
 question (day, time, morning/afternoon). Never ask "what day works best"
 before you have already called the tool at least once and seen real
 results.
-
-NEVER invent, guess, or state a specific doctor name, date, or time that
-did not come directly from a `fhir_get_slots` tool result. If you have
-not called the tool yet, you have no real slots to offer — call it first.
+WRONG (never do this, even once): asking "What day or time works best
+for you?" BEFORE calling fhir_get_slots. This is wrong even if you don't
+invent any specific slot data — the tool call always comes first, with
+no exceptions, regardless of how the patient phrased their request.
 
 Translating patient language into tool parameters:
   - A specific weekday ("Wednesday", "Friday") -> pass as `day`.
@@ -280,8 +280,9 @@ and nothing else, with no markdown formatting or code fences around it:
 """
 
 PAYMENT_PROMPT = """
-YOUR JOB THIS TURN: save the record and handle payment. Every prior step
-is already confirmed, including a specific chosen appointment slot.
+YOUR JOB THIS TURN: save the record and record the patient's payment
+choice. Every prior step is already confirmed, including a specific
+chosen appointment slot.
 
 Call `fhir_create_patient` with all collected fields including
 guardian_name and guardian_relationship if applicable.
@@ -292,25 +293,11 @@ If copay > 0, immediately follow with:
 "Your copay for this visit is $[amount]. Would you like to pay now or at
 the clinic?"
 Wait for patient response.
-- If "now"/"pay now":
-    Use the Stripe tool to create a payment link for the copay amount.
-    The Stripe tool may internally involve planning/decision-tree
-    questions as part of using it correctly — these are for YOU to
-    resolve yourself using information you already have (the copay
-    amount, patient name, appointment details). NEVER surface any of
-    these internal tool questions to the patient (e.g. never ask
-    "through your patient portal or email?", "how would you like to
-    receive this?", or anything similar — the patient never answers
-    implementation questions about how the tool works). Just create the
-    link using sensible defaults and share it directly.
-    Do NOT narrate what you are doing step by step (no "let me get the
-    details", "now I'll create the link", "I don't have a tool
-    available", or similar meta-commentary — you DO have Stripe tools
-    available; use them).
-    Once the link is ready, output exactly ONE short message containing
-    only the payment link and a brief instruction to click it.
-    Then say "Great! Let's take care of that now." then output the
-    complete JSON with "payment": "now"
+- If "now"/"pay now" -> say "Great! Let's take care of that now." then
+  output the complete JSON with "payment": "now". You do NOT create any
+  payment link yourself — that happens automatically after you output
+  this JSON. Never mention a URL, never say you are creating a link,
+  never narrate any payment implementation details at all.
 - If "later"/"at the clinic" -> say "No problem! You can pay at the clinic
   or via your patient portal." then output the complete JSON with
   "payment": "later"
@@ -329,7 +316,7 @@ AGENTS = {
     "insurance":  {"prompt": INSURANCE_PROMPT,  "tools": ["check_eligibility"]},
     "routing":    {"prompt": ROUTING_PROMPT,    "tools": []},
     "scheduling": {"prompt": SCHEDULING_PROMPT, "tools": ["get_current_date", "fhir_get_slots"]},
-    "payment":    {"prompt": PAYMENT_PROMPT,    "tools": ["fhir_create_patient"], "use_stripe_mcp": True},
+    "payment":    {"prompt": PAYMENT_PROMPT,    "tools": ["fhir_create_patient"]},
 }
 
 STEP_ORDER = ["identity", "insurance", "routing", "scheduling", "payment"]
@@ -374,9 +361,6 @@ def get_tools_for_agent(agent_name: str, all_tools: list) -> list:
     allowed = set(agent["tools"])
     return [t for t in all_tools if t.get("name") in allowed]
 
-
-def agent_uses_stripe(agent_name: str) -> bool:
-    return AGENTS.get(agent_name, {}).get("use_stripe_mcp", False)
 
 
 def apply_redirect(state: dict, parsed: dict) -> dict:

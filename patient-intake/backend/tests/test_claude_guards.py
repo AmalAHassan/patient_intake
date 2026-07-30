@@ -1,7 +1,15 @@
 """
 tests/test_claude_guards.py — Unit tests for the deterministic safety-net
-functions in claude.py (fake-link detection, stalling detection, slot
-fabrication detection, reasoning-leak stripping, redirect parsing).
+functions in claude.py (slot fabrication detection, routing-straying
+detection, reasoning-leak stripping, redirect parsing, reflection risk
+detection).
+
+Note: Stripe-related guards (fake-link detection, stalling detection,
+missing-link detection) were removed along with this file's tests for
+them, since payment is no longer AI-mediated at all — the payment agent
+just signals patient intent ("now"/"later"), and claude.py calls Stripe's
+real MCP server directly and deterministically. There's no longer any
+hallucination risk for that step to guard against.
 
 These are pure string/regex logic — no Anthropic API call, no MCP call,
 no Redis. Safe to run on every save or in CI with zero cost.
@@ -10,10 +18,7 @@ NOTE: importing services.claude triggers module-level Settings loading
 (requires a valid .env with ANTHROPIC_API_KEY, DATABASE_URL, REDIS_URL
 etc. — see config.py) and creates redis/Anthropic client objects, but
 does NOT make any network calls at import time. Run these from your
-normal backend/ virtualenv where .env is already set up. If you want
-these tests to have zero external dependencies at all (recommended long
-term), move the guard functions into their own services/guards.py module
-with no imports from config/redis/anthropic.
+normal backend/ virtualenv where .env is already set up.
 
 Run with:
     pip install pytest --break-system-packages
@@ -25,109 +30,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from services.claude import (
-    _contains_fabricated_stripe_link,
-    _is_payment_agent_stalling,
     _is_scheduling_agent_fabricating,
+    _is_routing_agent_straying_into_scheduling,
     _strip_leaked_reasoning,
     _is_risky_step,
     _extract_redirect,
-    _payment_now_missing_link,
 )
-
-
-# ── Fake Stripe link detection ──────────────────────────────────────────
-
-def test_real_buy_stripe_link_is_not_flagged():
-    text = "Here's your link: https://buy.stripe.com/test_14AeV6b2ka53b0yggsawo00"
-    assert _contains_fabricated_stripe_link(text) is False
-
-
-def test_real_checkout_stripe_link_is_not_flagged():
-    text = "Click here: https://checkout.stripe.com/pay/cs_live_abc123"
-    assert _contains_fabricated_stripe_link(text) is False
-
-
-def test_fabricated_stripe_com_pay_link_is_flagged():
-    """Regression test — this exact fake URL was shown to a real patient."""
-    text = "Here's your payment link: https://stripe.com/pay"
-    assert _contains_fabricated_stripe_link(text) is True
-
-
-def test_fabricated_stripe_com_checkout_link_is_flagged():
-    """Regression test — a second fake variant seen in production."""
-    text = "[Click here to pay](https://stripe.com/checkout)"
-    assert _contains_fabricated_stripe_link(text) is True
-
-
-def test_no_stripe_mention_at_all_is_not_flagged():
-    text = "Your appointment is confirmed for Tuesday at 2pm."
-    assert _contains_fabricated_stripe_link(text) is False
-
-
-# ── Payment agent stalling detection ────────────────────────────────────
-
-def test_stalling_question_without_tool_use_is_flagged():
-    """Regression test — the exact phrasing that leaked to a patient."""
-    text = (
-        "For this copay of $20, which payment option works best for you — "
-        "would you prefer a simple payment link you can click once, or "
-        "would you like it sent to your email?"
-    )
-    assert _is_payment_agent_stalling(text, tool_used_this_turn=False) is True
-
-
-def test_stalling_not_flagged_if_tool_was_actually_used():
-    text = "Which payment option works best for you?"
-    assert _is_payment_agent_stalling(text, tool_used_this_turn=True) is False
-
-
-def test_non_question_statement_is_not_flagged_as_stalling():
-    text = "Your copay is $25. Here's your payment link."
-    assert _is_payment_agent_stalling(text, tool_used_this_turn=False) is False
-
-
-def test_narration_without_link_or_tool_use_is_flagged_as_stalling():
-    """Regression test — this exact declarative (non-question) narration
-    was shown to a real patient, claiming to handle payment without ever
-    calling a tool or including any real link. Doesn't end in '?' and
-    never mentions 'stripe.com', so neither the question-based stall
-    check nor the fake-link check alone would have caught it."""
-    text = (
-        "Great! I don't have a direct payment link tool available. Let "
-        "me search for how to create a simple payment link for this "
-        "copay. Based on the Stripe documentation, I can help you with "
-        "a payment link. I'll use the Stripe API to generate a payment "
-        "link for the $25 copay. Great! Let's take care of that now."
-    )
-    assert _is_payment_agent_stalling(text, tool_used_this_turn=False) is True
-
-
-def test_payment_now_missing_link_is_flagged():
-    """Regression test — the Stripe tool genuinely succeeded (a real
-    link was created server-side) but the model jumped straight to the
-    completion JSON without ever telling the patient the URL. Nothing
-    to click, even though the tool call itself worked."""
-    text = '{"status": "complete", "data": {"copay": "25"}, "payment": "now"}'
-    assert _payment_now_missing_link(text) is True
-
-
-def test_payment_now_with_real_link_is_not_flagged():
-    text = (
-        "Here's your payment link: https://buy.stripe.com/test_abc123 "
-        '{"status": "complete", "data": {"copay": "25"}, "payment": "now"}'
-    )
-    assert _payment_now_missing_link(text) is False
-
-
-def test_payment_later_without_link_is_not_flagged():
-    """A copay deferred to the clinic never needs a link at all."""
-    text = '{"status": "complete", "data": {"copay": "25"}, "payment": "later"}'
-    assert _payment_now_missing_link(text) is False
-
-
-def test_unrelated_question_is_not_flagged_as_stalling():
-    text = "What city and state do you have on file with us?"
-    assert _is_payment_agent_stalling(text, tool_used_this_turn=False) is False
 
 
 # ── Scheduling agent fabrication detection ──────────────────────────────

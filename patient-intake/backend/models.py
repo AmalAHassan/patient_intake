@@ -22,6 +22,7 @@ class Patient(Base):
     phone = Column(String)
     email = Column(String, index=True)
 
+
     # Insurance
     insurance_id = Column(String)
     payer = Column(String)
@@ -35,6 +36,7 @@ class Patient(Base):
     appointment_doctor = Column(String)
     appointment_date = Column(String)
     appointment_time = Column(String)
+    appointment_status = Column(String, default="confirmed")
 
     # Payment
     payment_status    = Column(String, default="unpaid")
