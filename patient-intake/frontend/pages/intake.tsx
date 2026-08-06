@@ -11,6 +11,7 @@ interface IntakeData {
   dob: string
   phone: string
   email: string
+  address: string
   insurance_id: string
   payer: string
   copay: string
@@ -29,7 +30,7 @@ type PayDecision = 'none' | 'now' | 'later'
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 const STEPS = [
-  { id: 1, label: 'New or returning?', tag: 'Start'    },
+  { id: 1, label: 'Name & DOB',        tag: 'Start'    },
   { id: 2, label: 'Identity check',    tag: 'Verify'   },
   { id: 3, label: 'Confirm details',   tag: 'Review'   },
   { id: 4, label: 'Insurance',         tag: 'Coverage' },
@@ -92,12 +93,11 @@ function formatDob(value: string): string {
 
 function getQuickReplies(lastBotMsg: string): string[] {
   const msg = lastBotMsg.toLowerCase()
-  if (msg.includes('new patient or a returning'))
-    return ['New patient', 'Returning patient']
   if (msg.includes('is that still correct') || msg.includes('still current') ||
       msg.includes('still your current') || msg.includes('has that changed') ||
       msg.includes('is that right') || msg.includes('still active') ||
-      msg.includes('ending in') || msg.includes('is that still'))
+      msg.includes('ending in') || msg.includes('is that still') ||
+      msg.includes('sound good'))
     return ['Yes', 'No, it changed']
   if (msg.includes('pay now or at the clinic'))
     return ['Pay now', 'Pay at clinic']
@@ -330,6 +330,7 @@ function ConfirmationCard({ data, payDecision, onRestart }: {
         <Field label="DOB"          value={data.dob} />
         <Field label="Phone"        value={data.phone} />
         <Field label="Email"        value={maskEmail(data.email)} />
+        <Field label="Address"      value={data.address} />
         <Field label="Insurance"    value={data.payer} />
         <Field label="Reason"       value={data.reason} />
         <Field label="Guardian"     value={data.guardian_name} />
@@ -393,7 +394,7 @@ export default function IntakePage() {
       const res  = await fetch(`${API}/intake/start`, { method: 'POST' })
       const data = await res.json()
       setSessionId(data.session_id)
-      addMessage('bot', data.message || 'Hi! Are you a new or returning patient?')
+      addMessage('bot', data.message || "Hi, welcome! What's your full name?")
     } catch {
       addMessage('error', "Can't reach the backend. Make sure uvicorn is running on port 8000.")
     } finally {

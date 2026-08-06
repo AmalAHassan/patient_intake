@@ -91,6 +91,7 @@ def _patient_to_dict(p) -> dict:
         "patient_id":         p.id,
         "name":               p.name,
         "dob":                p.dob,
+        "address":            getattr(p, "address", "") or "",
         "department":         p.department,
         "appointment_doctor": p.appointment_doctor,
         "appointment_date":   p.appointment_date,
