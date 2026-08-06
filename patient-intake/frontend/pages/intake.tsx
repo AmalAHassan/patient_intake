@@ -408,6 +408,18 @@ export default function IntakePage() {
     boot()
   }, [boot])
 
+  // Watches the Stripe tab after payment is opened, resolving to exactly
+  // one of three outcomes. IMPORTANT: real payment status is always
+  // checked FIRST, tab-closed check SECOND — a closed tab does not mean
+  // payment failed (our own payment-complete page explicitly tells
+  // patients it's fine to close it once they see success), so treating
+  // "closed" as failure before ever checking real status would
+  // contradict what that page just told them.
+  //   1. Payment succeeds — confirmed via our own backend — shows a
+  //      thank-you message.
+  //   2. The patient closes the Stripe tab AND payment genuinely never
+  //      succeeded by that point — only then is it treated as a problem.
+  //   3. Neither happens within a reasonable window — gives up gracefully.
   const pollPaymentStatus = (stripeTab: Window | null) => {
     if (!sessionId) return
     const POLL_INTERVAL_MS = 4000
@@ -415,12 +427,6 @@ export default function IntakePage() {
     const startTime = Date.now()
 
     const intervalId = setInterval(async () => {
-      if (stripeTab && stripeTab.closed) {
-        clearInterval(intervalId)
-        addMessage('bot', 'Session ended — it looks like the payment page was closed before finishing. Please log in to the patient portal to pay, or pay at the clinic.')
-        return
-      }
-
       try {
         const res = await fetch(`${API}/payment/status-by-session/${sessionId}`)
         const data = await res.json()
@@ -431,6 +437,12 @@ export default function IntakePage() {
         }
       } catch {
         // Network hiccup — just try again next tick
+      }
+
+      if (stripeTab && stripeTab.closed) {
+        clearInterval(intervalId)
+        addMessage('bot', 'Session ended before payment was confirmed — it looks like the payment page was closed early. Please log in to the patient portal to pay, or pay at the clinic.')
+        return
       }
 
       if (Date.now() - startTime >= MAX_DURATION_MS) {

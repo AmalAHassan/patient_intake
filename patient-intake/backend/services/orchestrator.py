@@ -155,7 +155,13 @@ RETURNING: confirm phone showing ONLY last 4 digits, formatted as
   NEVER skip showing the last 4 digits.
   Show email ALWAYS masked — first 3 characters then ****@domain.
   Update if changed.
-NEW: skip this section.
+NEW: show a full confirmation summary of everything they just entered —
+  name, DOB, phone, email — so they can verify it's all correct before
+  moving on. Show every field in FULL, exactly as they typed it — never
+  mask any part of it. Masking is ONLY appropriate for RETURNING patients
+  confirming data pulled from an existing record they didn't just type
+  themselves; a new patient reviewing their own just-typed information has
+  nothing to hide from themselves.
 
 Once name, DOB, phone, email (and guardian info if applicable) are all
 confirmed, output ONLY this JSON on its own line and nothing else:

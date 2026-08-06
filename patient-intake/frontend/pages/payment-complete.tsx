@@ -12,13 +12,44 @@ export default function PaymentCompletePage() {
   useEffect(() => {
     if (!session_id || typeof session_id !== 'string') return
 
-    // One quick check on load — the webhook usually beats this page's
-    // load time, but if not, we still show something honest rather than
-    // a false "paid" claim.
-    fetch(`${API}/payment/status-by-session/${session_id}`)
-      .then(r => r.json())
-      .then(d => setStatus(d.paid ? 'paid' : 'pending'))
-      .catch(() => setStatus('pending'))
+    // Reaching this page at all already means Stripe confirmed a
+    // successful payment — Stripe only redirects here on success; a
+    // failed card keeps the patient on Stripe's own checkout page with
+    // an error, never reaching this URL. The ONLY reason our own
+    // "paid" check might not show true yet is a race: the webhook can
+    // take a few seconds to arrive. So retry a few times before
+    // settling on "pending" — a single early check would too often
+    // show pending for a payment that's about to succeed a moment
+    // later.
+    let attempts = 0
+    const maxAttempts = 5
+
+    const check = () => {
+      fetch(`${API}/payment/status-by-session/${session_id}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.paid) {
+            setStatus('paid')
+            return
+          }
+          attempts += 1
+          if (attempts < maxAttempts) {
+            setTimeout(check, 2000)
+          } else {
+            setStatus('pending')
+          }
+        })
+        .catch(() => {
+          attempts += 1
+          if (attempts < maxAttempts) {
+            setTimeout(check, 2000)
+          } else {
+            setStatus('pending')
+          }
+        })
+    }
+
+    check()
   }, [session_id])
 
   return (
@@ -42,22 +73,24 @@ export default function PaymentCompletePage() {
             <>
               <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
               <div style={{ fontSize: 18, fontWeight: 600, color: '#2c1a14', marginBottom: 8 }}>
-                Payment received
+                Payment successful
               </div>
               <div style={{ fontSize: 14, color: '#6b4a40' }}>
-                Thank you! You can close this tab and return to your registration.
+                Thank you — your copay has been received. You're welcome to close
+                this tab and return to your registration.
               </div>
             </>
           )}
           {status === 'pending' && (
             <>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>✓</div>
               <div style={{ fontSize: 18, fontWeight: 600, color: '#2c1a14', marginBottom: 8 }}>
-                Payment submitted
+                Payment successful
               </div>
               <div style={{ fontSize: 14, color: '#6b4a40' }}>
-                We're still confirming this with our payment provider — you're welcome
-                to close this tab. If anything's wrong, you'll see it reflected in your
-                patient portal shortly.
+                Your payment went through — we're just finishing updating your
+                record. You're welcome to close this tab; it'll be reflected in
+                your patient portal within a moment.
               </div>
             </>
           )}
