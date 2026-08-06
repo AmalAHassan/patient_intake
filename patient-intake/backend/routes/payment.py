@@ -1,17 +1,26 @@
 """
-payment.py — Stripe payment routes.
+payment.py — Stripe payment routes + patient portal access.
 """
 import stripe
 import os
 import json
+import random
+import redis as redis_lib
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from models import SessionLocal, Patient, IntakeSession
 from dotenv import load_dotenv
 from datetime import datetime
-from services.sms import send_payment_receipt
+from config import settings
+from services.sms import (
+    send_payment_receipt,
+    send_verification_code_email,
+    send_reschedule_confirmation,
+    send_cancellation_confirmation,
+)
 from services.mcp_client import call_tool
+from services.stripe_mcp import create_payment_link_via_mcp
 
 
 for env_path in [
@@ -19,27 +28,15 @@ for env_path in [
     os.path.join(os.path.dirname(__file__), "..", ".env"),
 ]:
     if os.path.exists(env_path):
-        load_dotenv(env_path, override=True)
+        load_dotenv(env_path)
         break
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 FRONTEND_URL   = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+redis_client = redis_lib.from_url(settings.redis_url)
+
 router = APIRouter()
-
-
-class CreateCheckoutRequest(BaseModel):
-    patient_id: str
-    amount_dollars: float
-    patient_name: str
-    doctor: Optional[str] = ""
-    date: Optional[str] = ""
-    description: Optional[str] = "Copay payment"
-
-
-class ConfirmCheckoutRequest(BaseModel):
-    patient_id: str
-    session_id: str
 
 
 class PortalLookupRequest(BaseModel):
@@ -56,75 +53,56 @@ class RescheduleConfirmRequest(BaseModel):
     doctor: str
     date: str
     time: str
+    reason: Optional[str] = None  # None/empty = keep existing reason unchanged
 
 
-@router.post("/payment/create-checkout-session")
-async def create_checkout_session(body: CreateCheckoutRequest):
-    try:
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": f"Copay — {body.doctor} {body.date}".strip(" —"),
-                    },
-                    "unit_amount": int(round(body.amount_dollars * 100)),
-                },
-                "quantity": 1,
-            }],
-            mode="payment",
-            success_url=(
-                f"{FRONTEND_URL}/intake?payment=success"
-                f"&patient_id={body.patient_id}"
-                f"&session_id={{CHECKOUT_SESSION_ID}}"
-            ),
-            cancel_url=f"{FRONTEND_URL}/intake?payment=cancelled",
-            metadata={"patient_id": body.patient_id},
-        )
-        return {"checkout_url": session.url}
-    except Exception as e:
-        print(f"[stripe] Failed to create checkout session: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+class RequestCodeBody(BaseModel):
+    name: str
+    dob: str
+    method: str = "email"
 
 
-@router.post("/payment/confirm-checkout")
-async def confirm_checkout(body: ConfirmCheckoutRequest):
-    try:
-        session = stripe.checkout.Session.retrieve(body.session_id)
+class VerifyCodeBody(BaseModel):
+    lookup_key: str
+    code: str
 
-        if session.payment_status != "paid":
-            return {"status": session.payment_status}
 
-        db = SessionLocal()
-        try:
-            patient = db.query(Patient).filter(
-                Patient.id == body.patient_id
-            ).first()
-            if patient:
-                payment_date = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-                patient.payment_status    = "paid"
-                patient.payment_intent_id = session.payment_intent
-                patient.payment_date      = payment_date
-                db.commit()
-                print(f"[stripe] Payment confirmed — patient: {patient.name} — session: {body.session_id}")
+class CreatePortalPaymentLinkRequest(BaseModel):
+    patient_id: str
 
-                send_payment_receipt(
-                    patient_name=patient.name or "",
-                    doctor=patient.appointment_doctor or "",
-                    date=patient.appointment_date or "",
-                    time=patient.appointment_time or "",
-                    department=patient.department or "",
-                    amount=patient.copay or "0",
-                    payment_date=payment_date,
-                )
-        finally:
-            db.close()
 
-        return {"status": "paid"}
-    except Exception as e:
-        print(f"[stripe] Confirm checkout failed: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+CODE_TTL_SECONDS     = 600
+MAX_VERIFY_ATTEMPTS  = 5
+
+
+def _lookup_key(name: str, dob: str) -> str:
+    return f"portal_code:{name.strip().lower()}:{dob.strip()}"
+
+
+def _mask_email(email: str) -> str:
+    if not email or "@" not in email:
+        return email
+    local, domain = email.split("@")
+    return f"{local[:3]}****@{domain}"
+
+
+def _patient_to_dict(p) -> dict:
+    return {
+        "patient_id":         p.id,
+        "name":               p.name,
+        "dob":                p.dob,
+        "department":         p.department,
+        "appointment_doctor": p.appointment_doctor,
+        "appointment_date":   p.appointment_date,
+        "appointment_time":   p.appointment_time,
+        "payer":              p.payer,
+        "copay":              p.copay,
+        "payment_status":     getattr(p, "payment_status", "unpaid") or "unpaid",
+        "payment_date":       getattr(p, "payment_date", None) or "",
+        "reason":             p.reason_for_visit,
+        "created_at":         p.created_at.isoformat() if p.created_at else "",
+        "appointment_status": getattr(p, "appointment_status", "confirmed") or "confirmed",
+    }
 
 
 @router.post("/portal/lookup")
@@ -135,31 +113,77 @@ async def portal_lookup(body: PortalLookupRequest):
             Patient.name.ilike(f"%{body.name.strip()}%"),
             Patient.dob == body.dob.strip(),
         ).all()
-
         if not patients:
             raise HTTPException(status_code=404, detail="No records found")
+        return {"patients": [_patient_to_dict(p) for p in patients]}
+    finally:
+        db.close()
 
-        return {
-            "patients": [
-                {
-                    "patient_id":         p.id,
-                    "name":               p.name,
-                    "dob":                p.dob,
-                    "department":         p.department,
-                    "appointment_doctor": p.appointment_doctor,
-                    "appointment_date":   p.appointment_date,
-                    "appointment_time":   p.appointment_time,
-                    "payer":              p.payer,
-                    "copay":              p.copay,
-                    "payment_status":     getattr(p, "payment_status", "unpaid") or "unpaid",
-                    "payment_date":       getattr(p, "payment_date", None) or "",
-                    "reason":             p.reason_for_visit,
-                    "created_at":         p.created_at.isoformat() if p.created_at else "",
-                    "appointment_status": getattr(p, "appointment_status", "confirmed") or "confirmed",
-                }
-                for p in patients
-            ]
-        }
+
+@router.post("/portal/request-code")
+async def request_portal_code(body: RequestCodeBody):
+    if body.method == "phone":
+        raise HTTPException(
+            status_code=400,
+            detail="Text messages aren't available yet — please choose email for now.",
+        )
+    if body.method != "email":
+        raise HTTPException(status_code=400, detail="Unsupported method")
+
+    db = SessionLocal()
+    try:
+        patients = db.query(Patient).filter(
+            Patient.name.ilike(f"%{body.name.strip()}%"),
+            Patient.dob == body.dob.strip(),
+        ).all()
+    finally:
+        db.close()
+
+    if not patients:
+        raise HTTPException(status_code=404, detail="No records found")
+
+    contact_patient = next((p for p in patients if p.email), None)
+    if not contact_patient:
+        raise HTTPException(status_code=400, detail="No email on file for this patient")
+
+    code = f"{random.randint(0, 999999):06d}"
+    key = _lookup_key(body.name, body.dob)
+    redis_client.setex(key, CODE_TTL_SECONDS, json.dumps({"code": code, "attempts": 0}))
+
+    send_verification_code_email(contact_patient.email, code)
+    masked = _mask_email(contact_patient.email)
+
+    print(f"[portal] Verification code sent (demo mode — check dev inbox) for {body.name}")
+    return {"lookup_key": key, "sent_to": masked}
+
+
+@router.post("/portal/verify-code")
+async def verify_portal_code(body: VerifyCodeBody):
+    stored_json = redis_client.get(body.lookup_key)
+    if not stored_json:
+        raise HTTPException(status_code=400, detail="Code expired — please request a new one")
+
+    stored = json.loads(stored_json)
+
+    if stored["attempts"] >= MAX_VERIFY_ATTEMPTS:
+        redis_client.delete(body.lookup_key)
+        raise HTTPException(status_code=429, detail="Too many attempts — please request a new code")
+
+    if body.code.strip() != stored["code"]:
+        stored["attempts"] += 1
+        redis_client.setex(body.lookup_key, CODE_TTL_SECONDS, json.dumps(stored))
+        raise HTTPException(status_code=400, detail="Incorrect code")
+
+    redis_client.delete(body.lookup_key)
+
+    _, name_part, dob_part = body.lookup_key.split(":", 2)
+    db = SessionLocal()
+    try:
+        patients = db.query(Patient).filter(
+            Patient.name.ilike(f"%{name_part}%"),
+            Patient.dob == dob_part,
+        ).all()
+        return {"patients": [_patient_to_dict(p) for p in patients]}
     finally:
         db.close()
 
@@ -174,16 +198,42 @@ async def cancel_appointment(body: CancelAppointmentRequest):
         patient.appointment_status = "cancelled"
         db.commit()
         print(f"[portal] Cancelled appointment — patient: {patient.name} (id: {patient.id})")
+
+        send_cancellation_confirmation(
+            patient_name=patient.name or "",
+            doctor=patient.appointment_doctor or "",
+            date=patient.appointment_date or "",
+            time=patient.appointment_time or "",
+            department=patient.department or "",
+        )
+
         return {"status": "cancelled"}
     finally:
         db.close()
 
 
 @router.get("/portal/reschedule-slots")
-async def reschedule_slots(department: str):
-    """Reuses the same fhir_get_slots logic the intake chat agent uses,
-    so reschedule shows real, current availability — not a guess."""
-    result = await call_tool("fhir_get_slots", {"department": department})
+async def reschedule_slots(
+    department: str,
+    day: Optional[str] = None,
+    after_time: Optional[str] = None,
+    before_time: Optional[str] = None,
+):
+    """
+    day/after_time/before_time are simple structured filters (not free
+    text) — matches a day-of-week or morning/afternoon/evening dropdown
+    on the frontend, so this stays fully deterministic with no AI
+    interpretation needed, same as the rest of the portal.
+    """
+    tool_input = {"department": department}
+    if day:
+        tool_input["day"] = day
+    if after_time:
+        tool_input["after_time"] = after_time
+    if before_time:
+        tool_input["before_time"] = before_time
+
+    result = await call_tool("fhir_get_slots", tool_input)
     try:
         parsed = json.loads(result) if isinstance(result, str) else result
     except json.JSONDecodeError:
@@ -193,6 +243,13 @@ async def reschedule_slots(department: str):
 
 @router.post("/portal/reschedule-appointment")
 async def reschedule_appointment(body: RescheduleConfirmRequest):
+    """
+    No identity re-verification and no copay recalculation — patients can
+    only reschedule within the SAME department, and copay doesn't vary
+    within a department today, so the existing stored copay stays valid.
+    reason is optional — if the patient says "same reason" the frontend
+    sends nothing and the existing reason_for_visit is left untouched.
+    """
     db = SessionLocal()
     try:
         patient = db.query(Patient).filter(Patient.id == body.patient_id).first()
@@ -202,9 +259,69 @@ async def reschedule_appointment(body: RescheduleConfirmRequest):
         patient.appointment_date   = body.date
         patient.appointment_time   = body.time
         patient.appointment_status = "confirmed"
+        if body.reason:
+            patient.reason_for_visit = body.reason
         db.commit()
         print(f"[portal] Rescheduled — patient: {patient.name} -> {body.doctor} on {body.date} at {body.time}")
+
+        send_reschedule_confirmation(
+            patient_name=patient.name or "",
+            doctor=patient.appointment_doctor or "",
+            date=patient.appointment_date or "",
+            time=patient.appointment_time or "",
+            department=patient.department or "",
+            reason=patient.reason_for_visit or "",
+        )
+
         return {"status": "rescheduled"}
+    finally:
+        db.close()
+
+
+@router.post("/portal/create-payment-link")
+async def create_portal_payment_link(body: CreatePortalPaymentLinkRequest):
+    """
+    Real Stripe-hosted payment link, same deterministic mechanism as
+    intake's payment step — no inline card fields on this page. Patient
+    is already fully identified at this point, so patient_id itself is
+    used as the reference the webhook resolves against directly (no
+    IntakeSession lookup needed for this path).
+    """
+    db = SessionLocal()
+    try:
+        patient = db.query(Patient).filter(Patient.id == body.patient_id).first()
+    finally:
+        db.close()
+
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    try:
+        copay_cents = int(round(float(patient.copay or "0") * 100))
+    except (ValueError, TypeError):
+        copay_cents = 0
+    if copay_cents <= 0:
+        raise HTTPException(status_code=400, detail="No copay due")
+
+    description = (
+        f"{patient.department or 'Visit'} copay - "
+        f"{patient.appointment_doctor or ''} {patient.appointment_date or ''}".strip()
+    )
+    link_result = await create_payment_link_via_mcp(copay_cents, description, body.patient_id)
+    if "url" not in link_result:
+        raise HTTPException(status_code=502, detail=link_result.get("error", "Could not create payment link"))
+
+    return {"url": link_result["url"]}
+
+
+@router.get("/portal/payment-status/{patient_id}")
+async def portal_payment_status(patient_id: str):
+    db = SessionLocal()
+    try:
+        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        if not patient:
+            return {"paid": False, "found": False}
+        return {"paid": getattr(patient, "payment_status", "") == "paid", "found": True}
     finally:
         db.close()
 
@@ -216,13 +333,6 @@ async def get_publishable_key():
 
 @router.get("/payment/status-by-session/{intake_session_id}")
 async def payment_status_by_session(intake_session_id: str):
-    """
-    Polled by the ORIGINAL intake chat tab (not the Stripe tab) to detect
-    when payment succeeds, so it can show a confirmation message without
-    needing the patient to do anything else. Resolves our own
-    intake_session_id -> the patient row created for that session -> its
-    current payment_status.
-    """
     db = SessionLocal()
     try:
         session = db.query(IntakeSession).filter(
@@ -255,12 +365,6 @@ async def stripe_webhook(request: Request):
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except Exception as e:
-        # Broadened from (ValueError, SignatureVerificationError) — a
-        # None/missing secret raises a raw AttributeError from inside
-        # stripe's own library (calling .encode() on None) BEFORE it ever
-        # gets to a proper signature-verification error, which slipped
-        # past the narrower except clause and crashed as an unhandled 500
-        # instead of a clean 400.
         print(f"[webhook] Verification FAILED: {type(e).__name__}: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature or webhook misconfigured")
 
@@ -268,39 +372,32 @@ async def stripe_webhook(request: Request):
 
     if event["type"] in ("checkout.session.completed", "payment_intent.succeeded"):
         obj = event["data"]["object"]
-
-        # obj is a Stripe SDK object, not a plain dict — chaining .get()
-        # calls directly on it can trigger its custom __getattr__ lookup
-        # and raise AttributeError. Convert to a real dict first, then
-        # .get() safely on that.
         obj_dict = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
         metadata = obj_dict.get("metadata") or {}
 
-        # Our Payment Link attaches metadata.session_id (our OWN intake
-        # session ID) — NOT patient_id, since patient_id doesn't exist
-        # yet at the moment the payment link is created (it's generated
-        # afterward, once intake completes). Resolve session -> patient
-        # here instead.
-        intake_session_id = metadata.get("session_id")
-        print(f"[webhook] metadata.session_id: {intake_session_id}")
+        reference_id = metadata.get("session_id")
+        print(f"[webhook] metadata reference: {reference_id}")
 
-        if not intake_session_id:
-            print("[webhook] No session_id in metadata — cannot resolve patient, skipping")
+        if not reference_id:
+            print("[webhook] No reference in metadata — cannot resolve patient, skipping")
             return {"status": "ok"}
 
         db = SessionLocal()
         try:
+            # Try resolving as an intake session_id first (chat-flow
+            # payments); if that doesn't match anything, treat the same
+            # reference as a direct Patient.id instead (portal-flow
+            # payments, where patient_id was already known up front).
+            patient = None
             intake_session = db.query(IntakeSession).filter(
-                IntakeSession.session_id == intake_session_id
+                IntakeSession.session_id == reference_id
             ).first()
-
-            if not intake_session or not intake_session.patient_id:
-                print(f"[webhook] No matching IntakeSession/patient_id for session_id: {intake_session_id}")
-                return {"status": "ok"}
-
-            patient = db.query(Patient).filter(
-                Patient.id == intake_session.patient_id
-            ).first()
+            if intake_session and intake_session.patient_id:
+                patient = db.query(Patient).filter(
+                    Patient.id == intake_session.patient_id
+                ).first()
+            else:
+                patient = db.query(Patient).filter(Patient.id == reference_id).first()
 
             if patient:
                 patient.payment_status = "paid"
@@ -318,7 +415,7 @@ async def stripe_webhook(request: Request):
                     payment_date=patient.payment_date,
                 )
             else:
-                print(f"[webhook] IntakeSession found but Patient row missing for id: {intake_session.patient_id}")
+                print(f"[webhook] Could not resolve reference to any patient: {reference_id}")
         finally:
             db.close()
 

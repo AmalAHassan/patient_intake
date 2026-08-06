@@ -1,7 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Head from 'next/head'
-import { loadStripe } from '@stripe/stripe-js'
-import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -19,7 +17,7 @@ interface Appointment {
   payment_date: string
   reason: string
   created_at: string
-  appointment_status: string // "confirmed" | "cancelled"
+  appointment_status: string
 }
 
 interface Slot {
@@ -28,86 +26,110 @@ interface Slot {
   time: string
 }
 
-function PaymentForm({ appointment, onPaid }: { appointment: Appointment; onPaid: () => void }) {
-  const stripe = useStripe()
-  const elements = useElements()
+const DAY_OPTIONS = [
+  { value: '', label: 'Any day' },
+  { value: 'monday', label: 'Monday' },
+  { value: 'tuesday', label: 'Tuesday' },
+  { value: 'wednesday', label: 'Wednesday' },
+  { value: 'thursday', label: 'Thursday' },
+  { value: 'friday', label: 'Friday' },
+]
+
+const TIME_OPTIONS = [
+  { value: '', label: 'Any time' },
+  { value: 'morning', label: 'Morning' },
+  { value: 'afternoon', label: 'Afternoon' },
+  { value: 'evening', label: 'Evening' },
+]
+
+function PayNowButton({ apt }: { apt: Appointment }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState(false)
+  const [polling, setPolling] = useState(false)
+  const [paid, setPaid] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
+
+  const startPolling = () => {
+    setPolling(true)
+    const startTime = Date.now()
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/portal/payment-status/${apt.patient_id}`)
+        const data = await res.json()
+        if (data.paid) {
+          if (pollRef.current) clearInterval(pollRef.current)
+          setPolling(false)
+          setPaid(true)
+          return
+        }
+      } catch {
+        // network hiccup — just try again next tick
+      }
+      if (Date.now() - startTime >= 5 * 60 * 1000) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        setPolling(false)
+      }
+    }, 4000)
+  }
 
   const handlePay = async () => {
-    if (!stripe || !elements) return
     setLoading(true)
     setError('')
+    // Pre-open a blank tab synchronously (before any await) so the
+    // browser doesn't block it as a popup once the real URL is ready.
+    const tab = window.open('', '_blank')
     try {
-      const res = await fetch(`${API}/payment/create-intent`, {
+      const res = await fetch(`${API}/portal/create-payment-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          patient_id: appointment.patient_id,
-          amount_dollars: parseFloat(appointment.copay),
-          patient_name: appointment.name,
-          description: `Copay — ${appointment.appointment_doctor} ${appointment.appointment_date}`,
-        }),
+        body: JSON.stringify({ patient_id: apt.patient_id }),
       })
-      const { client_secret, payment_intent_id } = await res.json()
-      const card = elements.getElement(CardElement)
-      if (!card) return
-      const result = await stripe.confirmCardPayment(client_secret, {
-        payment_method: { card },
-      })
-      if (result.error) {
-        setError(result.error.message || 'Payment failed')
-      } else if (result.paymentIntent?.status === 'succeeded') {
-        await fetch(`${API}/payment/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            patient_id: appointment.patient_id,
-            payment_intent_id,
-          }),
-        })
-        setSuccess(true)
-        onPaid()
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setError(body.detail || 'Could not start payment.')
+        tab?.close()
+        return
       }
-    } catch (e: any) {
-      setError(e.message || 'Something went wrong')
+      const data = await res.json()
+      if (tab) {
+        tab.location.href = data.url
+      } else {
+        window.open(data.url, '_blank')
+      }
+      startPolling()
+    } catch {
+      setError('Could not reach the server.')
+      tab?.close()
     } finally {
       setLoading(false)
     }
   }
 
-  if (success) return (
-    <div style={{ background: '#e0f0ea', borderRadius: 8, padding: '12px 16px', fontSize: 13, color: '#0d6b52', marginTop: 12 }}>
-      ✓ Payment of ${appointment.copay} confirmed — a receipt has been sent to your email.
+  if (paid) return (
+    <div style={{ background: '#e0f0ea', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#0d6b52', marginTop: 12 }}>
+      ✓ Payment received — thank you!
     </div>
   )
 
   return (
-    <div style={{ marginTop: 16, borderTop: '0.5px solid #e2ddd6', paddingTop: 16 }}>
-      <div style={{ fontSize: 12, color: '#8a8880', marginBottom: 8 }}>Pay copay — ${appointment.copay}</div>
-      <div style={{
-        border: '1px solid #e2ddd6', borderRadius: 8, padding: '10px 14px',
-        background: '#fafaf8', marginBottom: 10,
+    <div style={{ marginTop: 14 }}>
+      <button onClick={handlePay} disabled={loading} style={{
+        padding: '8px 18px', borderRadius: 8,
+        background: 'transparent', border: '0.5px solid #0d6b52',
+        color: '#0d6b52', fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
       }}>
-        <CardElement options={{ style: { base: { fontSize: '14px', color: '#1a1916' } } }} />
-      </div>
-      {error && <div style={{ fontSize: 12, color: '#c04020', marginBottom: 8 }}>{error}</div>}
-      <button
-        onClick={handlePay}
-        disabled={loading}
-        style={{
-          width: '100%', padding: '10px', borderRadius: 8,
-          background: loading ? '#e2ddd6' : '#0d6b52',
-          border: 'none', color: '#fff', fontSize: 14,
-          cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-        }}
-      >
-        {loading ? 'Processing...' : `Pay $${appointment.copay}`}
+        {loading ? 'Opening secure payment...' : 'Pay now'}
       </button>
-      <div style={{ fontSize: 11, color: '#8a8880', textAlign: 'center', marginTop: 6 }}>
-        Test card: 4242 4242 4242 4242 · any expiry · any CVC
-      </div>
+      {polling && (
+        <div style={{ fontSize: 12, color: '#8a8880', marginTop: 8 }}>
+          Waiting for payment to complete in the other tab...
+        </div>
+      )}
+      {error && <div style={{ fontSize: 12, color: '#c04020', marginTop: 8 }}>{error}</div>}
     </div>
   )
 }
@@ -119,14 +141,28 @@ function RescheduleSlots({ apt, onDone, onCancel }: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState<Slot | null>(null)
+  const [dayFilter, setDayFilter] = useState('')
+  const [timeFilter, setTimeFilter] = useState('')
+  const [sameReason, setSameReason] = useState(true)
+  const [newReason, setNewReason] = useState('')
 
-  useEffect(() => {
-    fetch(`${API}/portal/reschedule-slots?department=${encodeURIComponent(apt.department)}`)
+  const loadSlots = () => {
+    setLoading(true)
+    setError('')
+    const params = new URLSearchParams({ department: apt.department })
+    if (dayFilter) params.set('day', dayFilter)
+    if (timeFilter === 'morning') params.set('before_time', '12:00 PM')
+    if (timeFilter === 'afternoon') { params.set('after_time', '12:00 PM'); params.set('before_time', '5:00 PM') }
+    if (timeFilter === 'evening') params.set('after_time', '5:00 PM')
+
+    fetch(`${API}/portal/reschedule-slots?${params.toString()}`)
       .then(r => r.json())
       .then(d => setSlots((d.slots || []).slice(0, 5)))
       .catch(() => setError('Could not load available times.'))
       .finally(() => setLoading(false))
-  }, [apt.department])
+  }
+
+  useEffect(() => { loadSlots() }, [dayFilter, timeFilter])
 
   const confirmReschedule = async (slot: Slot) => {
     setConfirming(slot)
@@ -139,6 +175,7 @@ function RescheduleSlots({ apt, onDone, onCancel }: {
           doctor: slot.doctor,
           date: slot.date,
           time: slot.time,
+          reason: sameReason ? null : newReason,
         }),
       })
       onDone()
@@ -151,24 +188,73 @@ function RescheduleSlots({ apt, onDone, onCancel }: {
   return (
     <div style={{ marginTop: 14, borderTop: '0.5px solid #e2ddd6', paddingTop: 14 }}>
       <div style={{ fontSize: 12, color: '#8a8880', marginBottom: 10 }}>
-        Choose a new time for {apt.department}:
+        Rescheduling within {apt.department}
       </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 12, color: '#4a4845', display: 'block', marginBottom: 6 }}>
+          Reason for visit
+        </label>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <button onClick={() => setSameReason(true)} style={{
+            flex: 1, padding: '8px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+            border: sameReason ? '1.5px solid #0d6b52' : '1px solid #e2ddd6',
+            background: sameReason ? '#e0f0ea' : '#fafaf8', color: '#1a1916',
+          }}>Same as before</button>
+          <button onClick={() => setSameReason(false)} style={{
+            flex: 1, padding: '8px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+            border: !sameReason ? '1.5px solid #0d6b52' : '1px solid #e2ddd6',
+            background: !sameReason ? '#e0f0ea' : '#fafaf8', color: '#1a1916',
+          }}>Something's changed</button>
+        </div>
+        {apt.reason && sameReason && (
+          <div style={{ fontSize: 12, color: '#aaa' }}>Current: {apt.reason}</div>
+        )}
+        {!sameReason && (
+          <input
+            value={newReason}
+            onChange={e => setNewReason(e.target.value)}
+            placeholder="What's changed, or anything to add?"
+            style={{
+              width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #e2ddd6',
+              fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <select value={dayFilter} onChange={e => setDayFilter(e.target.value)} style={{
+          flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #e2ddd6',
+          fontSize: 12, fontFamily: 'inherit', background: '#fafaf8', color: '#1a1916',
+        }}>
+          {DAY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={timeFilter} onChange={e => setTimeFilter(e.target.value)} style={{
+          flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #e2ddd6',
+          fontSize: 12, fontFamily: 'inherit', background: '#fafaf8', color: '#1a1916',
+        }}>
+          {TIME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+
       {loading && <div style={{ fontSize: 13, color: '#8a8880' }}>Loading available times...</div>}
       {error && <div style={{ fontSize: 12, color: '#c04020', marginBottom: 8 }}>{error}</div>}
       {!loading && slots.length === 0 && !error && (
-        <div style={{ fontSize: 13, color: '#8a8880' }}>No available slots found right now.</div>
+        <div style={{ fontSize: 13, color: '#8a8880' }}>No available slots match — try a different day or time.</div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {slots.map((s, i) => (
           <button
             key={i}
             onClick={() => confirmReschedule(s)}
-            disabled={!!confirming}
+            disabled={!!confirming || (!sameReason && !newReason.trim())}
             style={{
               textAlign: 'left', padding: '9px 14px', borderRadius: 8,
               border: '1px solid #e2ddd6',
               background: confirming === s ? '#e0f0ea' : '#fafaf8',
-              color: '#1a1916', fontSize: 13, cursor: confirming ? 'not-allowed' : 'pointer',
+              color: '#1a1916', fontSize: 13,
+              cursor: (confirming || (!sameReason && !newReason.trim())) ? 'not-allowed' : 'pointer',
               fontFamily: 'inherit',
             }}
           >
@@ -176,26 +262,15 @@ function RescheduleSlots({ apt, onDone, onCancel }: {
           </button>
         ))}
       </div>
-      <button
-        onClick={onCancel}
-        style={{
-          marginTop: 10, fontSize: 12, color: '#8a8880', background: 'none',
-          border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-        }}
-      >
-        Never mind
-      </button>
+      <button onClick={onCancel} style={{
+        marginTop: 10, fontSize: 12, color: '#8a8880', background: 'none',
+        border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+      }}>Never mind</button>
     </div>
   )
 }
 
-function AppointmentCard({ apt, stripePromise, onPaid, onChanged }: {
-  apt: Appointment
-  stripePromise: any
-  onPaid: () => void
-  onChanged: () => void
-}) {
-  const [showPay, setShowPay] = useState(false)
+function AppointmentCard({ apt, onChanged }: { apt: Appointment; onChanged: () => void }) {
   const [showReschedule, setShowReschedule] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState('')
@@ -213,15 +288,12 @@ function AppointmentCard({ apt, stripePromise, onPaid, onChanged }: {
         body: JSON.stringify({ patient_id: apt.patient_id }),
       })
       if (!res.ok) {
-        const body = await res.text()
-        console.error('[portal] Cancel failed:', res.status, body)
-        setCancelError(`Could not cancel (server said: ${res.status}). Check the backend terminal for details.`)
+        setCancelError(`Could not cancel (server said: ${res.status}).`)
         return
       }
       onChanged()
-    } catch (e) {
-      console.error('[portal] Cancel request failed:', e)
-      setCancelError('Could not reach the server — is the backend running?')
+    } catch {
+      setCancelError('Could not reach the server.')
     } finally {
       setCancelling(false)
     }
@@ -238,97 +310,51 @@ function AppointmentCard({ apt, stripePromise, onPaid, onChanged }: {
           <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1916', marginBottom: 4 }}>
             {apt.appointment_doctor}
             {cancelled && (
-              <span style={{ fontSize: 11, color: '#c04020', marginLeft: 8, fontWeight: 500 }}>
-                Cancelled
-              </span>
+              <span style={{ fontSize: 11, color: '#c04020', marginLeft: 8, fontWeight: 500 }}>Cancelled</span>
             )}
           </div>
           <div style={{ fontSize: 13, color: '#8a8880' }}>
             {apt.appointment_date} · {apt.appointment_time} · {apt.department}
           </div>
           {apt.reason && (
-            <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>
-              Reason: {apt.reason}
-            </div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>Reason: {apt.reason}</div>
           )}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
           <div style={{
             fontSize: 11, padding: '3px 10px', borderRadius: 20,
             background: paid ? '#e0f0ea' : '#fdf0dc',
-            color: paid ? '#0d6b52' : '#b06a10',
-            marginBottom: 4,
+            color: paid ? '#0d6b52' : '#b06a10', marginBottom: 4,
           }}>
             {paid ? 'Paid ✓' : 'Unpaid'}
           </div>
-          {paid && apt.payment_date && (
-            <div style={{ fontSize: 11, color: '#8a8880', marginBottom: 4 }}>
-              {apt.payment_date}
-            </div>
-          )}
           {apt.copay && apt.copay !== '0' && (
-            <div style={{ fontSize: 13, color: '#4a4845' }}>
-              Copay: ${apt.copay}
-            </div>
+            <div style={{ fontSize: 13, color: '#4a4845' }}>Copay: ${apt.copay}</div>
           )}
-          <div style={{ fontSize: 11, color: '#ccc', marginTop: 2 }}>
-            {apt.payer}
-          </div>
+          <div style={{ fontSize: 11, color: '#ccc', marginTop: 2 }}>{apt.payer}</div>
         </div>
       </div>
 
       {!cancelled && !paid && apt.copay && parseFloat(apt.copay) > 0 && (
-        <>
-          {!showPay ? (
-            <button
-              onClick={() => setShowPay(true)}
-              style={{
-                marginTop: 14, marginRight: 8, padding: '8px 18px', borderRadius: 8,
-                background: 'transparent', border: '0.5px solid #0d6b52',
-                color: '#0d6b52', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              Pay now
-            </button>
-          ) : (
-            <Elements stripe={stripePromise}>
-              <PaymentForm appointment={apt} onPaid={onPaid} />
-            </Elements>
-          )}
-        </>
+        <PayNowButton apt={apt} />
       )}
 
       {!cancelled && !showReschedule && (
         <div style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={() => setShowReschedule(true)}
-              style={{
-                padding: '8px 18px', borderRadius: 8,
-                background: 'transparent', border: '0.5px solid #8a8880',
-                color: '#4a4845', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              Reschedule
-            </button>
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              style={{
-                padding: '8px 18px', borderRadius: 8,
-                background: 'transparent', border: '0.5px solid #c04020',
-                color: '#c04020', fontSize: 13,
-                cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              {cancelling ? 'Cancelling...' : 'Cancel appointment'}
-            </button>
+            <button onClick={() => setShowReschedule(true)} style={{
+              padding: '8px 18px', borderRadius: 8,
+              background: 'transparent', border: '0.5px solid #8a8880',
+              color: '#4a4845', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+            }}>Reschedule</button>
+            <button onClick={handleCancel} disabled={cancelling} style={{
+              padding: '8px 18px', borderRadius: 8,
+              background: 'transparent', border: '0.5px solid #c04020',
+              color: '#c04020', fontSize: 13,
+              cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+            }}>{cancelling ? 'Cancelling...' : 'Cancel appointment'}</button>
           </div>
-          {cancelError && (
-            <div style={{ fontSize: 12, color: '#c04020', marginTop: 8 }}>
-              {cancelError}
-            </div>
-          )}
+          {cancelError && <div style={{ fontSize: 12, color: '#c04020', marginTop: 8 }}>{cancelError}</div>}
         </div>
       )}
 
@@ -343,41 +369,86 @@ function AppointmentCard({ apt, stripePromise, onPaid, onChanged }: {
   )
 }
 
+type Step = 'identify' | 'enter-code' | 'verified'
+
 export default function PortalPage() {
+  const [step, setStep] = useState<Step>('identify')
   const [name, setName] = useState('')
   const [dob, setDob] = useState('')
+  const [lookupKey, setLookupKey] = useState('')
+  const [sentTo, setSentTo] = useState('')
+  const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [appointments, setAppointments] = useState<Appointment[]>([])
-  const [loggedIn, setLoggedIn] = useState(false)
-  const [stripePromise, setStripePromise] = useState<any>(null)
 
-  useEffect(() => {
-    fetch(`${API}/payment/publishable-key`)
-      .then(r => r.json())
-      .then(d => setStripePromise(loadStripe(d.publishable_key)))
-      .catch(() => {})
-  }, [])
-
-  const handleLookup = async () => {
+  const handleIdentify = async () => {
     if (!name || !dob) return
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${API}/portal/lookup`, {
+      const lookupRes = await fetch(`${API}/portal/lookup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, dob }),
       })
-      if (!res.ok) {
+      if (!lookupRes.ok) {
         setError('No records found. Check your name and date of birth.')
+        return
+      }
+      await requestCode()
+    } catch {
+      setError('Could not connect to server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const requestCode = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API}/portal/request-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, dob, method: 'email' }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setError(body.detail || 'Could not send code.')
+        return
+      }
+      const data = await res.json()
+      setLookupKey(data.lookup_key)
+      setSentTo(data.sent_to)
+      setStep('enter-code')
+    } catch {
+      setError('Could not reach the server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const verifyCode = async () => {
+    if (!code) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API}/portal/verify-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lookup_key: lookupKey, code }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setError(body.detail || 'Incorrect code.')
         return
       }
       const data = await res.json()
       setAppointments(data.patients)
-      setLoggedIn(true)
+      setStep('verified')
     } catch {
-      setError('Could not connect to server.')
+      setError('Could not reach the server.')
     } finally {
       setLoading(false)
     }
@@ -407,19 +478,12 @@ export default function PortalPage() {
       </Head>
 
       <div style={{ minHeight: '100vh', background: '#f8f6f1', fontFamily: "'Instrument Sans', sans-serif" }}>
-
         <div style={{
           background: '#1a1916', padding: '16px 32px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <a href="/" style={{
-              color: 'rgba(255,255,255,0.4)', fontSize: 13, textDecoration: 'none',
-              transition: 'color 0.15s',
-            }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-              onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.4)')}
-            >
+            <a href="/" style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, textDecoration: 'none' }}>
               ← Lea Medical Center
             </a>
             <div style={{ color: 'rgba(255,255,255,0.15)', fontSize: 13 }}>|</div>
@@ -430,72 +494,68 @@ export default function PortalPage() {
           <div style={{ fontSize: 11, color: '#8a8880' }}>Ledelsea · Secure · HIPAA compliant</div>
         </div>
 
-        <div style={{ maxWidth: 600, margin: '0 auto', padding: '40px 24px' }}>
+        <div style={{ maxWidth: 480, margin: '0 auto', padding: '40px 24px' }}>
 
-          {!loggedIn ? (
-            <div style={{
-              background: '#fff', borderRadius: 16, border: '0.5px solid #e2ddd6',
-              padding: '36px 32px',
-            }}>
-              <div style={{ fontSize: 22, fontWeight: 600, color: '#1a1916', marginBottom: 6 }}>
-                View your statements
-              </div>
+          {step === 'identify' && (
+            <div style={{ background: '#fff', borderRadius: 16, border: '0.5px solid #e2ddd6', padding: '36px 32px' }}>
+              <div style={{ fontSize: 22, fontWeight: 600, color: '#1a1916', marginBottom: 6 }}>Access your visit</div>
               <div style={{ fontSize: 14, color: '#8a8880', marginBottom: 28 }}>
-                Enter your name and date of birth to access your appointment history, pay any outstanding balances, or cancel/reschedule.
+                Enter your name and date of birth. We'll email you a quick verification code.
               </div>
-
               <div style={{ marginBottom: 16 }}>
                 <label style={{ fontSize: 12, color: '#4a4845', display: 'block', marginBottom: 6 }}>Full name</label>
-                <input
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="e.g. Brandon Collins"
-                  style={{
-                    width: '100%', padding: '11px 14px', borderRadius: 8,
-                    border: '1px solid #e2ddd6', fontSize: 14,
-                    fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
-                  }}
-                />
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Brandon Collins"
+                  style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #e2ddd6', fontSize: 14, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
               </div>
-
               <div style={{ marginBottom: 24 }}>
                 <label style={{ fontSize: 12, color: '#4a4845', display: 'block', marginBottom: 6 }}>Date of birth</label>
-                <input
-                  value={dob}
-                  onChange={e => setDob(e.target.value)}
-                  placeholder="MM/DD/YYYY"
-                  style={{
-                    width: '100%', padding: '11px 14px', borderRadius: 8,
-                    border: '1px solid #e2ddd6', fontSize: 14,
-                    fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
-                  }}
-                />
+                <input value={dob} onChange={e => setDob(e.target.value)} placeholder="MM/DD/YYYY"
+                  style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #e2ddd6', fontSize: 14, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
               </div>
+              {error && <div style={{ fontSize: 13, color: '#c04020', marginBottom: 14 }}>{error}</div>}
+              <button onClick={handleIdentify} disabled={loading || !name || !dob} style={{
+                width: '100%', padding: '12px', borderRadius: 8,
+                background: loading || !name || !dob ? '#e2ddd6' : '#0d6b52',
+                border: 'none', color: '#fff', fontSize: 14, fontWeight: 500,
+                cursor: loading || !name || !dob ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+              }}>{loading ? 'Checking...' : 'Continue'}</button>
+            </div>
+          )}
 
-              {error && (
-                <div style={{ fontSize: 13, color: '#c04020', marginBottom: 14 }}>{error}</div>
-              )}
-
-              <button
-                onClick={handleLookup}
-                disabled={loading || !name || !dob}
+          {step === 'enter-code' && (
+            <div style={{ background: '#fff', borderRadius: 16, border: '0.5px solid #e2ddd6', padding: '36px 32px' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#1a1916', marginBottom: 6 }}>Enter your code</div>
+              <div style={{ fontSize: 14, color: '#8a8880', marginBottom: 24 }}>
+                We sent a code to {sentTo}.
+              </div>
+              <input
+                value={code}
+                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="6-digit code"
+                inputMode="numeric"
                 style={{
-                  width: '100%', padding: '12px', borderRadius: 8,
-                  background: loading || !name || !dob ? '#e2ddd6' : '#0d6b52',
-                  border: 'none', color: '#fff', fontSize: 14, fontWeight: 500,
-                  cursor: loading || !name || !dob ? 'not-allowed' : 'pointer',
-                  fontFamily: 'inherit',
+                  width: '100%', padding: '13px 14px', borderRadius: 8, border: '1.5px solid #0d6b52',
+                  fontSize: 20, letterSpacing: '0.3em', textAlign: 'center', fontFamily: 'inherit',
+                  outline: 'none', boxSizing: 'border-box', marginBottom: 16,
                 }}
-              >
-                {loading ? 'Looking up...' : 'View my records'}
+              />
+              {error && <div style={{ fontSize: 13, color: '#c04020', marginBottom: 14 }}>{error}</div>}
+              <button onClick={verifyCode} disabled={loading || code.length !== 6} style={{
+                width: '100%', padding: '12px', borderRadius: 8,
+                background: loading || code.length !== 6 ? '#e2ddd6' : '#0d6b52',
+                border: 'none', color: '#fff', fontSize: 14, fontWeight: 500,
+                cursor: loading || code.length !== 6 ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+              }}>{loading ? 'Verifying...' : 'Verify'}</button>
+              <button onClick={requestCode} disabled={loading} style={{ marginTop: 12, fontSize: 12, color: '#8a8880', background: 'none', border: 'none', cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'block', width: '100%', textAlign: 'center' }}>
+                Didn't get it? Send again
               </button>
             </div>
-          ) : (
+          )}
+
+          {step === 'verified' && (
             <>
               <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 22, fontWeight: 600, color: '#1a1916' }}>
-                  {appointments[0]?.name}
-                </div>
+                <div style={{ fontSize: 22, fontWeight: 600, color: '#1a1916' }}>{appointments[0]?.name}</div>
                 <div style={{ fontSize: 13, color: '#8a8880', marginTop: 4 }}>
                   DOB: {dob} · {appointments.length} appointment{appointments.length !== 1 ? 's' : ''}
                 </div>
@@ -503,51 +563,27 @@ export default function PortalPage() {
 
               {totalUnpaid > 0 && (
                 <div style={{
-                  background: '#fdf0dc', border: '0.5px solid #f0c878',
-                  borderRadius: 12, padding: '14px 20px', marginBottom: 20,
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  background: '#fdf0dc', border: '0.5px solid #f0c878', borderRadius: 12,
+                  padding: '14px 20px', marginBottom: 20, display: 'flex',
+                  justifyContent: 'space-between', alignItems: 'center',
                 }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: '#b06a10' }}>Outstanding balance</div>
-                    <div style={{ fontSize: 12, color: '#c8901a', marginTop: 2 }}>
-                      {appointments.filter(a => a.appointment_status !== 'cancelled' && a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length} unpaid copay{appointments.filter(a => a.appointment_status !== 'cancelled' && a.payment_status !== 'paid' && parseFloat(a.copay || '0') > 0).length !== 1 ? 's' : ''}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 22, fontWeight: 600, color: '#b06a10' }}>
-                    ${totalUnpaid.toFixed(2)}
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#b06a10' }}>Outstanding balance</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: '#b06a10' }}>${totalUnpaid.toFixed(2)}</div>
                 </div>
               )}
-
               {totalUnpaid === 0 && (
-                <div style={{
-                  background: '#e0f0ea', border: '0.5px solid #9fd8c0',
-                  borderRadius: 12, padding: '14px 20px', marginBottom: 20,
-                  fontSize: 13, color: '#0d6b52',
-                }}>
+                <div style={{ background: '#e0f0ea', border: '0.5px solid #9fd8c0', borderRadius: 12, padding: '14px 20px', marginBottom: 20, fontSize: 13, color: '#0d6b52' }}>
                   ✓ All balances paid — you're up to date
                 </div>
               )}
 
               {appointments.map(apt => (
-                <AppointmentCard
-                  key={apt.patient_id}
-                  apt={apt}
-                  stripePromise={stripePromise}
-                  onPaid={refresh}
-                  onChanged={refresh}
-                />
+                <AppointmentCard key={apt.patient_id} apt={apt} onChanged={refresh} />
               ))}
 
-              <button
-                onClick={() => { setLoggedIn(false); setAppointments([]); setName(''); setDob('') }}
-                style={{
-                  marginTop: 8, fontSize: 13, color: '#8a8880', background: 'none',
-                  border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                }}
-              >
-                ← Sign out
-              </button>
+              <button onClick={() => { setStep('identify'); setAppointments([]); setName(''); setDob(''); setCode('') }} style={{
+                marginTop: 8, fontSize: 13, color: '#8a8880', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+              }}>← Sign out</button>
             </>
           )}
         </div>

@@ -210,19 +210,20 @@ CHECK and DEPARTMENT ALIGNMENT CHECK defined in CLINICAL GUIDELINES
 silently before proceeding — never print these checks or their results as
 a sentence to the patient.
 
+Once department and reason are both collected (and no emergency flagged),
+output ONLY this JSON on its own line and nothing else, with no markdown
+formatting or code fences around it — include the CONFIRMED department
+exactly as one of the 7 valid options listed above:
+{"redirect": "scheduling", "reason": "routing complete", "department": "Family Medicine"}
+
 NEVER ask about appointment day or time, and NEVER say anything like
 "which day or time works best" or "would you like me to show you what
 we have available" — that is entirely the SCHEDULING agent's job, not
 yours. The MOMENT department and reason are both confirmed (and any
 required referral check is resolved), you MUST immediately output the
-redirect JSON below with no further questions of your own — do not ask
+redirect JSON above with no further questions of your own — do not ask
 anything else first, even if it feels natural to continue the
 conversation yourself.
-
-Once department and reason are both collected (and no emergency flagged),
-output ONLY this JSON on its own line and nothing else, with no markdown
-formatting or code fences around it:
-{"redirect": "scheduling", "reason": "routing complete"}
 """
 
 SCHEDULING_PROMPT = """
@@ -258,10 +259,7 @@ numbered, one per line, EXACTLY in this format:
 Do not use bullet points, dashes, or any other format. Do not group by day
 with sub-bullets. Every line must start with a number and a period.
 
-Wait for the patient to pick a number. After presenting slots, ask: "Or
-would you prefer a specific day or time?" If they give a preference,
-re-call `fhir_get_slots` with the appropriate parameters and show the new
-REAL results the same numbered way.
+Wait for the patient to pick a number from the list.
 
 If no slots match the filter:
   Say: "I don't see any [department] slots on [day/time] right now."

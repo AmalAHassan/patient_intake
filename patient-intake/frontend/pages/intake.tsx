@@ -24,9 +24,6 @@ interface IntakeData {
 }
 
 type Status = 'collecting' | 'complete' | 'emergency_redirect' | 'staff_requested' | 'ended'
-// 'now'/'later' reflect what the patient told Claude conversationally.
-// There is no 'paid' confirmation without a Stripe webhook wired in — see
-// note below.
 type PayDecision = 'none' | 'now' | 'later'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -40,6 +37,22 @@ const STEPS = [
   { id: 6, label: 'Reason for visit',  tag: 'Note'     },
   { id: 7, label: 'Scheduling',        tag: 'Book'     },
   { id: 8, label: 'Confirmed',         tag: 'Done'     },
+]
+
+const DAY_OPTIONS = [
+  { value: '', label: 'Any day' },
+  { value: 'monday', label: 'Monday' },
+  { value: 'tuesday', label: 'Tuesday' },
+  { value: 'wednesday', label: 'Wednesday' },
+  { value: 'thursday', label: 'Thursday' },
+  { value: 'friday', label: 'Friday' },
+]
+
+const TIME_OPTIONS = [
+  { value: '', label: 'Any time' },
+  { value: 'morning', label: 'Morning' },
+  { value: 'afternoon', label: 'Afternoon' },
+  { value: 'evening', label: 'Evening' },
 ]
 
 function inferStep(messages: Message[]): number {
@@ -123,6 +136,57 @@ function QuickReplies({ replies, onSelect }: { replies: string[]; onSelect: (r: 
           }}
         >{r}</button>
       ))}
+    </div>
+  )
+}
+
+function QuickSlotFilter({ sessionId, onResult }: { sessionId: string; onResult: (reply: string) => void }) {
+  const [day, setDay] = useState('')
+  const [timeOfDay, setTimeOfDay] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const fetchSlots = async () => {
+    setLoading(true)
+    try {
+      const body: any = { session_id: sessionId }
+      if (day) body.day = day
+      if (timeOfDay === 'morning') body.before_time = '12:00 PM'
+      if (timeOfDay === 'afternoon') { body.after_time = '12:00 PM'; body.before_time = '5:00 PM' }
+      if (timeOfDay === 'evening') body.after_time = '5:00 PM'
+
+      const res = await fetch(`${API}/intake/quick-slots`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      onResult(data.reply || 'Could not load slots right now.')
+    } catch {
+      onResult('Could not load slots right now.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 0 6px' }}>
+      <select value={day} onChange={e => setDay(e.target.value)} style={{
+        padding: '6px 10px', borderRadius: 20, border: '1.5px solid #8b5e52',
+        fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: '#8b5e52',
+      }}>
+        {DAY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <select value={timeOfDay} onChange={e => setTimeOfDay(e.target.value)} style={{
+        padding: '6px 10px', borderRadius: 20, border: '1.5px solid #8b5e52',
+        fontSize: 12, fontFamily: 'inherit', background: 'transparent', color: '#8b5e52',
+      }}>
+        {TIME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <button onClick={fetchSlots} disabled={loading} style={{
+        padding: '6px 14px', borderRadius: 20, border: '1.5px solid #8b5e52',
+        background: '#8b5e52', color: '#fff', fontSize: 12,
+        cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+      }}>{loading ? '...' : 'Quick search'}</button>
     </div>
   )
 }
@@ -221,10 +285,6 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
   )
 }
 
-// Payment is now handled entirely conversationally, via the payment
-// agent's Stripe MCP tool sharing a link directly in chat (auto-opened
-// in a new tab). This card is a summary only — no buttons, no separate
-// Checkout Session flow.
 function ConfirmationCard({ data, payDecision, onRestart }: {
   data: IntakeData; payDecision: PayDecision; onRestart: () => void
 }) {
@@ -304,6 +364,7 @@ export default function IntakePage() {
   const [input, setInput]                   = useState('')
   const [loading, setLoading]               = useState(false)
   const [status, setStatus]                 = useState<Status>('collecting')
+  const [currentAgent, setCurrentAgent]     = useState<string>('')
   const [intakeData, setIntakeData]         = useState<IntakeData | null>(null)
   const [patientId, setPatientId]           = useState<string | null>(null)
   const [currentStep, setCurrentStep]       = useState(1)
@@ -347,19 +408,10 @@ export default function IntakePage() {
     boot()
   }, [boot])
 
-  // Watches the Stripe tab after payment is opened, resolving to exactly
-  // one of three outcomes:
-  //   1. Payment succeeds (confirmed by the webhook, via polling our own
-  //      backend) — shows a thank-you message.
-  //   2. The patient closes the Stripe tab without paying — detected
-  //      immediately via window.closed, no need to wait for a timeout
-  //      since we already know for certain.
-  //   3. Neither happens within a reasonable window — gives up
-  //      gracefully, payment might still succeed later on its own.
   const pollPaymentStatus = (stripeTab: Window | null) => {
     if (!sessionId) return
     const POLL_INTERVAL_MS = 4000
-    const MAX_DURATION_MS  = 5 * 60 * 1000 // 5 minutes
+    const MAX_DURATION_MS  = 5 * 60 * 1000
     const startTime = Date.now()
 
     const intervalId = setInterval(async () => {
@@ -378,7 +430,7 @@ export default function IntakePage() {
           return
         }
       } catch {
-        // Network hiccup — just try again next tick, don't abandon the poll
+        // Network hiccup — just try again next tick
       }
 
       if (Date.now() - startTime >= MAX_DURATION_MS) {
@@ -402,11 +454,10 @@ export default function IntakePage() {
       const data = await res.json()
       const clean = (s: string) => (s || '').replace(/\*\*(.+?)\*\*/g, '$1')
       const rawReply = clean(data.reply)
-      // The backend now creates the payment link deterministically and
-      // sends it as its own field — no more parsing it out of the AI's
-      // reply text, since the AI never sees or generates the URL at all.
       const stripeLink: string | null = data.payment_url || null
       const displayReply = stripeLink ? "Opening a secure payment page for your copay in a new tab…" : rawReply
+
+      if (data.current_agent) setCurrentAgent(data.current_agent)
 
       if (data.status === 'complete') {
         addMessage('bot', displayReply)
@@ -427,14 +478,6 @@ export default function IntakePage() {
         addMessage('bot', displayReply || 'Something went wrong.')
       }
 
-      // Browsers block window.open() calls that happen after an async
-      // gap (like awaiting this fetch) — they no longer count as part of
-      // the original click, so they get treated as a blocked popup. Fix:
-      // a blank tab was already pre-opened synchronously at click time
-      // (see maybePreOpenPaymentTab below); just navigate it now that we
-      // have the real URL. Only fall back to a fresh window.open() if no
-      // tab was pre-opened (e.g. patient typed "pay now" as free text
-      // rather than clicking the button).
       if (stripeLink) {
         let stripeTab = preOpenedWindow
         if (preOpenedWindow) {
@@ -456,32 +499,36 @@ export default function IntakePage() {
     }
   }
 
-  // If the last bot message is the pay-now/pay-at-clinic prompt, pre-open
-  // a blank tab synchronously — this must happen INSIDE the click handler,
-  // before any await, or the browser will block it as a popup later.
-  const maybePreOpenPaymentTab = (): Window | null => {
-    if (quickReplies.includes('Pay now')) {
+  // Only pre-open a blank tab when the ACTUAL text being sent is exactly
+  // "Pay now" — not just whenever that button happens to be one of the
+  // options offered (which previously also matched "Pay at clinic",
+  // causing a blank tab to flash open then get closed by the cleanup
+  // logic below, since no real payment_url ever comes back for that
+  // choice). This must happen INSIDE the click handler, before any
+  // await, or the browser will block it as a popup later.
+  const maybePreOpenPaymentTab = (textToSend: string): Window | null => {
+    if (textToSend === 'Pay now') {
       return window.open('', '_blank')
     }
     return null
   }
 
   const handleSend = () => {
-    const preOpened = maybePreOpenPaymentTab()
+    const preOpened = maybePreOpenPaymentTab(input.trim())
     sendText(input.trim(), preOpened)
   }
 
   const handleQuickReply = (reply: string) => {
     const toSend = reply.replace(/^\d+\.\s*/, '')
     setQuickReplyUsed(true)
-    const preOpened = maybePreOpenPaymentTab()
+    const preOpened = maybePreOpenPaymentTab(toSend)
     sendText(toSend, preOpened)
   }
 
   const restart = () => {
     setSessionId(null); setMessages([]); setInput('')
     setStatus('collecting'); setIntakeData(null); setPatientId(null)
-    setCurrentStep(1); setPayDecision('none')
+    setCurrentStep(1); setPayDecision('none'); setCurrentAgent('')
     setQuickReplyUsed(false); setConsentSigned(false)
     bootedRef.current = false
     boot()
@@ -500,6 +547,13 @@ export default function IntakePage() {
     !lastBotMsg.toLowerCase().includes('confirm') &&
     !lastBotMsg.toLowerCase().includes('details')
 
+  // The scheduling agent always uses this exact phrasing when confirming
+  // a specific chosen slot (see SCHEDULING_PROMPT) — hide the quick-slot
+  // dropdown at that point, since offering to search for MORE slots
+  // makes no sense while the patient is just answering yes/no to confirm
+  // the one they already picked.
+  const isConfirmingSlot = lastBotMsg.toLowerCase().includes('shall i book that')
+
   const locked = status !== 'collecting'
   const placeholderText = locked
     ? status === 'emergency_redirect' ? 'Please call 911 or 988 immediately.'
@@ -509,11 +563,10 @@ export default function IntakePage() {
     : quickReplies.length > 0         ? 'Or type your response...'
     : 'Type a message...'
 
-  // Consent is only required when a guardian was collected during
-  // intake — meaning the patient is a minor. Adult patients never see
-  // this form.
   const isMinor = !!(intakeData?.guardian_name && intakeData.guardian_name.trim())
   const showConsent = status === 'complete' && intakeData && isMinor && !consentSigned
+
+  const showQuickSlotFilter = currentAgent === 'scheduling' && status === 'collecting' && !loading && !isConfirmingSlot
 
   return (
     <>
@@ -635,6 +688,12 @@ export default function IntakePage() {
             {quickReplies.length > 0 && (
               <div style={{ marginTop: 2 }}>
                 <QuickReplies replies={quickReplies} onSelect={handleQuickReply} />
+              </div>
+            )}
+
+            {showQuickSlotFilter && sessionId && (
+              <div style={{ marginTop: 2 }}>
+                <QuickSlotFilter sessionId={sessionId} onResult={(reply) => addMessage('bot', reply)} />
               </div>
             )}
 
