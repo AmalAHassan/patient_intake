@@ -25,7 +25,6 @@ interface IntakeData {
 }
 
 type Status = 'collecting' | 'complete' | 'emergency_redirect' | 'staff_requested' | 'ended'
-type PayDecision = 'none' | 'now' | 'later'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -68,6 +67,29 @@ function inferStep(messages: Message[]): number {
   return 1
 }
 
+/**
+ * Defensive layout fix applied to EVERY bot message the moment it
+ * enters state (see addMessage below) — regardless of which backend
+ * endpoint produced it (intake/start, intake/message, intake/quick-slots
+ * all funnel through here). The backend agents present numbered lists
+ * (departments, appointment slots) and are instructed to always put
+ * each item on its own line, but the model periodically glues the FIRST
+ * item onto the same line as the question that precedes it, e.g.
+ * "Which department are you visiting today? 1. Family Medicine\n2.
+ * OB/GYN...". cleanBotMessage and getQuickReplies below only recognize
+ * a line as a selectable option if the line itself STARTS with a
+ * number, so a glued item 1 silently stays as plain unclickable text
+ * while items 2+ correctly become buttons — a real but easy-to-miss
+ * feature bug, since the message still reads fine to a human. Rather
+ * than rely on the backend to always format this perfectly, normalize
+ * it here too: insert the missing line break whenever a numbered item
+ * ("1. ", "2. ", etc.) appears anywhere other than the start of a line.
+ */
+function normalizeNumberedList(text: string): string {
+  if (!text) return text
+  return text.replace(/([^\n])[ \t]+(\d{1,2}\.\s)/g, '$1\n$2')
+}
+
 function cleanBotMessage(text: string): string {
   return text
     .split('\n')
@@ -76,12 +98,6 @@ function cleanBotMessage(text: string): string {
     .replace(/\s*Here are your options:\s*/gi, '')
     .replace(/\s*Which one works best for you\?\s*$/gi, '')
     .trim()
-}
-
-function maskEmail(email: string): string {
-  if (!email || !email.includes('@')) return email
-  const [local, domain] = email.split('@')
-  return `${local.slice(0, 3)}****@${domain}`
 }
 
 function formatDob(value: string): string {
@@ -99,8 +115,6 @@ function getQuickReplies(lastBotMsg: string): string[] {
       msg.includes('ending in') || msg.includes('is that still') ||
       msg.includes('sound good'))
     return ['Yes', 'No, it changed']
-  if (msg.includes('pay now or at the clinic'))
-    return ['Pay now', 'Pay at clinic']
   const numberedLines = lastBotMsg.split('\n').filter(l => /^\d+\./.test(l.trim()))
   if (numberedLines.length > 0) {
     return numberedLines.map(l => l.trim())
@@ -215,7 +229,7 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
     <div style={{
       background: '#f5efe8', border: '1px solid #d4c4bc',
       borderRadius: 16, padding: '14px 18px', maxWidth: 360,
-      alignSelf: 'flex-start', marginTop: 4,
+      alignSelf: 'flex-start', marginTop: 4, flexShrink: 0,
     }}>
       <div style={{ fontSize: 13, color: '#6b3d30', fontWeight: 500 }}>Consent signed</div>
       <div style={{ fontSize: 11, color: '#9e8880', marginTop: 5 }}>
@@ -233,7 +247,7 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
       <div style={{
         background: '#fff', border: '1px solid #e8ddd6',
         borderRadius: 16, padding: '18px 20px', maxWidth: 360,
-        alignSelf: 'flex-start', marginTop: 4,
+        alignSelf: 'flex-start', marginTop: 4, flexShrink: 0,
         boxShadow: '0 1px 4px rgba(44,26,20,0.06)',
       }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#2c1a14', marginBottom: 4 }}>HIPAA Consent</div>
@@ -285,75 +299,161 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
   )
 }
 
-function ConfirmationCard({ data, payDecision, onRestart }: {
-  data: IntakeData; payDecision: PayDecision; onRestart: () => void
-}) {
-  const Field = ({ label, value }: { label: string; value: string }) =>
-    value ? (
-      <div style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: '1px solid #f0e8e0' }}>
-        <span style={{ fontSize: 11, color: '#9e8880', minWidth: 100, textTransform: 'uppercase', letterSpacing: '0.05em', paddingTop: 1 }}>{label}</span>
-        <span style={{ fontSize: 13, color: '#2c1a14', fontWeight: 500 }}>{value}</span>
-      </div>
-    ) : null
+// Pay Now half of the payment action — unchanged behavior (real tab,
+// real polling), but now reports upward via onStart the MOMENT the
+// patient commits to this path, so the sibling Pay Later button can
+// hide itself rather than sitting there as a conflicting option once
+// a real payment attempt is underway.
+function IntakePayNowButton({ sessionId, onStart }: { sessionId: string; onStart: () => void }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [polling, setPolling] = useState(false)
+  const [paid, setPaid] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const showCopay = data.copay && parseFloat(data.copay) > 0
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
+
+  const startPolling = () => {
+    setPolling(true)
+    const startTime = Date.now()
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/payment/status-by-session/${sessionId}`)
+        const data = await res.json()
+        if (data.paid) {
+          if (pollRef.current) clearInterval(pollRef.current)
+          setPolling(false)
+          setPaid(true)
+          return
+        }
+      } catch {
+        // network hiccup — just try again next tick
+      }
+      if (Date.now() - startTime >= 5 * 60 * 1000) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        setPolling(false)
+      }
+    }, 4000)
+  }
+
+  const handlePay = async () => {
+    onStart()
+    setLoading(true)
+    setError('')
+    // Pre-open synchronously, before any await — browsers block
+    // window.open() calls that happen after an async gap.
+    const tab = window.open('', '_blank')
+    try {
+      const res = await fetch(`${API}/intake/create-payment-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setError(body.detail || 'Could not start payment.')
+        tab?.close()
+        return
+      }
+      const data = await res.json()
+      if (tab) tab.location.href = data.url
+      else window.open(data.url, '_blank')
+      startPolling()
+    } catch {
+      setError('Could not reach the server.')
+      tab?.close()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (paid) return (
+    <div style={{ background: '#e0f0ea', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#0d6b52' }}>
+      ✓ Payment received — thank you!
+    </div>
+  )
+
+  return (
+    <div>
+      <button onClick={handlePay} disabled={loading} style={{
+        padding: '9px 20px', borderRadius: 8,
+        background: loading ? '#e8ddd6' : '#8b5e52',
+        border: 'none', color: '#fff', fontSize: 13, fontWeight: 600,
+        cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+      }}>
+        {loading ? 'Opening secure payment...' : 'Pay now'}
+      </button>
+      {polling && (
+        <div style={{ fontSize: 12, color: '#9e8880', marginTop: 8 }}>
+          Waiting for payment to complete in the other tab...
+        </div>
+      )}
+      {error && <div style={{ fontSize: 12, color: '#b04030', marginTop: 8 }}>{error}</div>}
+    </div>
+  )
+}
+
+const PAY_LATER_COUNTDOWN_SECONDS = 10
+
+// The one card shown after intake completes when a copay is due — two
+// real choices, not two suggestions: Pay Now hands off to Stripe with
+// no AI in the trigger path (see IntakePayNowButton); Pay Later commits
+// to ending the session outright rather than leaving it in limbo, with
+// a visible countdown before the automatic restart so the choice feels
+// deliberate rather than abrupt.
+function PaymentAction({ sessionId, onSessionEnd }: { sessionId: string; onSessionEnd: () => void }) {
+  const [payNowStarted, setPayNowStarted] = useState(false)
+  const [payLaterChosen, setPayLaterChosen] = useState(false)
+  const [secondsLeft, setSecondsLeft] = useState(PAY_LATER_COUNTDOWN_SECONDS)
+
+  useEffect(() => {
+    if (!payLaterChosen) return
+    if (secondsLeft <= 0) {
+      onSessionEnd()
+      return
+    }
+    const timer = setTimeout(() => setSecondsLeft(s => s - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [payLaterChosen, secondsLeft, onSessionEnd])
+
+  if (payLaterChosen) {
+    return (
+      <div style={{
+        background: '#fdf4e8', border: '1px solid #e8c878',
+        borderRadius: 16, padding: '14px 20px',
+        maxWidth: 360, width: '100%', alignSelf: 'flex-start', marginTop: 4,
+        flexShrink: 0,
+      }}>
+        <div style={{ fontSize: 13, color: '#8b6020', fontWeight: 600 }}>Session ended</div>
+        <div style={{ fontSize: 12, color: '#8b6020', marginTop: 4 }}>
+          You can pay at the clinic or through the patient portal. Redirecting to start a new intake in {secondsLeft} second{secondsLeft !== 1 ? 's' : ''}...
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{
       background: '#fff', border: '1px solid #e8ddd6',
-      borderRadius: 16, overflow: 'hidden',
+      borderRadius: 16, padding: '14px 20px',
       maxWidth: 360, width: '100%', alignSelf: 'flex-start', marginTop: 4,
-      boxShadow: '0 2px 8px rgba(44,26,20,0.08)',
+      flexShrink: 0,
+      boxShadow: '0 2px 8px rgba(44,26,20,0.06)',
     }}>
-      <div style={{ background: '#3d2b24', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-            <path d="M1.5 7L5 10.5L12.5 3" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
-        <div>
-          <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>Intake complete</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#fff' }}>You&apos;re all set, {data.name?.split(' ')[0]}</div>
-        </div>
-      </div>
-
-      {data.appointment_doctor && (
-        <div style={{ background: '#f5ede6', padding: '12px 20px', borderBottom: '1px solid #e8ddd6' }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#8b5e52', marginBottom: 4 }}>Your appointment</div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#3d2b24', fontFamily: "'Barlow', sans-serif" }}>{data.appointment_doctor}</div>
-          <div style={{ fontSize: 12, color: '#6b4a40', marginTop: 2 }}>{data.appointment_date} · {data.appointment_time} · {data.department}</div>
-        </div>
-      )}
-
-      <div style={{ padding: '4px 20px 12px' }}>
-        <Field label="Patient"      value={data.name} />
-        <Field label="DOB"          value={data.dob} />
-        <Field label="Phone"        value={data.phone} />
-        <Field label="Email"        value={maskEmail(data.email)} />
-        <Field label="Address"      value={data.address} />
-        <Field label="Insurance"    value={data.payer} />
-        <Field label="Reason"       value={data.reason} />
-        <Field label="Guardian"     value={data.guardian_name} />
-        <Field label="Relationship" value={data.guardian_relationship} />
-        {showCopay && (
-          <div style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: '1px solid #f0e8e0' }}>
-            <span style={{ fontSize: 11, color: '#9e8880', minWidth: 100, textTransform: 'uppercase', letterSpacing: '0.05em', paddingTop: 1 }}>Copay</span>
-            <span style={{ fontSize: 13, color: '#2c1a14', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
-              ${data.copay}
-              {payDecision === 'now' && <span style={{ fontSize: 10, background: '#f5ede6', color: '#8b5e52', padding: '2px 7px', borderRadius: 20 }}>Payment link sent</span>}
-              {payDecision === 'later' && <span style={{ fontSize: 10, background: '#fdf4e8', color: '#a07030', padding: '2px 7px', borderRadius: 20 }}>Pay at clinic</span>}
-            </span>
-          </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <IntakePayNowButton sessionId={sessionId} onStart={() => setPayNowStarted(true)} />
+        {!payNowStarted && (
+          <button onClick={() => setPayLaterChosen(true)} style={{
+            padding: '9px 20px', borderRadius: 8,
+            background: 'transparent', border: '1.5px solid #8b5e52',
+            color: '#8b5e52', fontSize: 13, fontWeight: 600,
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            Pay later
+          </button>
         )}
-      </div>
-
-      <div style={{ padding: '10px 20px', borderTop: '1px solid #f0e8e0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#faf7f3' }}>
-        <span style={{ fontSize: 10, color: '#9e8880' }}>
-          A reminder will be sent before your visit
-        </span>
-        <button onClick={onRestart} style={{ fontSize: 11, color: '#8b5e52', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
-          New intake
-        </button>
       </div>
     </div>
   )
@@ -369,7 +469,6 @@ export default function IntakePage() {
   const [intakeData, setIntakeData]         = useState<IntakeData | null>(null)
   const [patientId, setPatientId]           = useState<string | null>(null)
   const [currentStep, setCurrentStep]       = useState(1)
-  const [payDecision, setPayDecision]       = useState<PayDecision>('none')
   const [quickReplyUsed, setQuickReplyUsed] = useState(false)
   const [consentSigned, setConsentSigned]   = useState(false)
   const messagesEndRef                      = useRef<HTMLDivElement>(null)
@@ -380,8 +479,9 @@ export default function IntakePage() {
   useEffect(() => { scroll() }, [messages, loading, consentSigned])
 
   const addMessage = (role: Message['role'], text: string) => {
+    const normalized = role === 'bot' ? normalizeNumberedList(text) : text
     setMessages(prev => {
-      const next = [...prev, { role, text }]
+      const next = [...prev, { role, text: normalized }]
       setCurrentStep(inferStep(next))
       return next
     })
@@ -409,51 +509,7 @@ export default function IntakePage() {
     boot()
   }, [boot])
 
-  // Watches the Stripe tab after payment is opened, resolving to exactly
-  // one of three outcomes. IMPORTANT: real payment status is always
-  // checked FIRST, tab-closed check SECOND — a closed tab does not mean
-  // payment failed (our own payment-complete page explicitly tells
-  // patients it's fine to close it once they see success), so treating
-  // "closed" as failure before ever checking real status would
-  // contradict what that page just told them.
-  //   1. Payment succeeds — confirmed via our own backend — shows a
-  //      thank-you message.
-  //   2. The patient closes the Stripe tab AND payment genuinely never
-  //      succeeded by that point — only then is it treated as a problem.
-  //   3. Neither happens within a reasonable window — gives up gracefully.
-  const pollPaymentStatus = (stripeTab: Window | null) => {
-    if (!sessionId) return
-    const POLL_INTERVAL_MS = 4000
-    const MAX_DURATION_MS  = 5 * 60 * 1000
-    const startTime = Date.now()
-
-    const intervalId = setInterval(async () => {
-      try {
-        const res = await fetch(`${API}/payment/status-by-session/${sessionId}`)
-        const data = await res.json()
-        if (data.paid) {
-          clearInterval(intervalId)
-          addMessage('bot', '✓ Payment received — thank you!')
-          return
-        }
-      } catch {
-        // Network hiccup — just try again next tick
-      }
-
-      if (stripeTab && stripeTab.closed) {
-        clearInterval(intervalId)
-        addMessage('bot', 'Session ended before payment was confirmed — it looks like the payment page was closed early. Please log in to the patient portal to pay, or pay at the clinic.')
-        return
-      }
-
-      if (Date.now() - startTime >= MAX_DURATION_MS) {
-        clearInterval(intervalId)
-        addMessage('bot', "Still waiting on payment — you can pay anytime from the patient portal.")
-      }
-    }, POLL_INTERVAL_MS)
-  }
-
-  const sendText = async (text: string, preOpenedWindow: Window | null = null) => {
+  const sendText = async (text: string) => {
     if (!text || !sessionId || status !== 'collecting' || loading) return
     addMessage('user', text)
     setInput('')
@@ -467,81 +523,46 @@ export default function IntakePage() {
       const data = await res.json()
       const clean = (s: string) => (s || '').replace(/\*\*(.+?)\*\*/g, '$1')
       const rawReply = clean(data.reply)
-      const stripeLink: string | null = data.payment_url || null
-      const displayReply = stripeLink ? "Opening a secure payment page for your copay in a new tab…" : rawReply
 
       if (data.current_agent) setCurrentAgent(data.current_agent)
 
       if (data.status === 'complete') {
-        addMessage('bot', displayReply)
+        addMessage('bot', rawReply)
         setStatus('complete')
         if (data.data) setIntakeData(data.data)
         if (data.patient_id) setPatientId(data.patient_id)
-        setPayDecision(data.payment === 'now' ? 'now' : data.payment === 'later' ? 'later' : 'none')
       } else if (data.status === 'emergency_redirect') {
-        addMessage('error', displayReply)
+        addMessage('error', rawReply)
         setStatus('emergency_redirect')
         setCurrentStep(8)
       } else if (data.status === 'staff_requested') {
-        addMessage('bot', displayReply)
+        addMessage('bot', rawReply)
         setStatus('staff_requested')
       } else if (data.status === 'ended') {
         setStatus('ended')
       } else {
-        addMessage('bot', displayReply || 'Something went wrong.')
-      }
-
-      if (stripeLink) {
-        let stripeTab = preOpenedWindow
-        if (preOpenedWindow) {
-          preOpenedWindow.location.href = stripeLink
-        } else {
-          stripeTab = window.open(stripeLink, '_blank')
-        }
-        pollPaymentStatus(stripeTab)
-      } else if (preOpenedWindow) {
-        // No link came back this turn — don't leave a blank tab open.
-        preOpenedWindow.close()
+        addMessage('bot', rawReply || 'Something went wrong.')
       }
     } catch {
       addMessage('error', 'Error reaching the server.')
-      if (preOpenedWindow) preOpenedWindow.close()
     } finally {
       setLoading(false)
       inputRef.current?.focus()
     }
   }
 
-  // Only pre-open a blank tab when the ACTUAL text being sent is exactly
-  // "Pay now" — not just whenever that button happens to be one of the
-  // options offered (which previously also matched "Pay at clinic",
-  // causing a blank tab to flash open then get closed by the cleanup
-  // logic below, since no real payment_url ever comes back for that
-  // choice). This must happen INSIDE the click handler, before any
-  // await, or the browser will block it as a popup later.
-  const maybePreOpenPaymentTab = (textToSend: string): Window | null => {
-    if (textToSend === 'Pay now') {
-      return window.open('', '_blank')
-    }
-    return null
-  }
-
-  const handleSend = () => {
-    const preOpened = maybePreOpenPaymentTab(input.trim())
-    sendText(input.trim(), preOpened)
-  }
+  const handleSend = () => sendText(input.trim())
 
   const handleQuickReply = (reply: string) => {
     const toSend = reply.replace(/^\d+\.\s*/, '')
     setQuickReplyUsed(true)
-    const preOpened = maybePreOpenPaymentTab(toSend)
-    sendText(toSend, preOpened)
+    sendText(toSend)
   }
 
   const restart = () => {
     setSessionId(null); setMessages([]); setInput('')
     setStatus('collecting'); setIntakeData(null); setPatientId(null)
-    setCurrentStep(1); setPayDecision('none'); setCurrentAgent('')
+    setCurrentStep(1); setCurrentAgent('')
     setQuickReplyUsed(false); setConsentSigned(false)
     bootedRef.current = false
     boot()
@@ -578,6 +599,8 @@ export default function IntakePage() {
 
   const isMinor = !!(intakeData?.guardian_name && intakeData.guardian_name.trim())
   const showConsent = status === 'complete' && intakeData && isMinor && !consentSigned
+  const showPaymentAction = status === 'complete' && intakeData && sessionId
+    && intakeData.copay && parseFloat(intakeData.copay) > 0
 
   const showQuickSlotFilter = currentAgent === 'scheduling' && status === 'collecting' && !loading && !isConfirmingSlot
 
@@ -710,31 +733,28 @@ export default function IntakePage() {
               </div>
             )}
 
-            {status === 'complete' && intakeData && (
-              <>
-                <ConfirmationCard
-                  data={intakeData} payDecision={payDecision}
-                  onRestart={restart}
-                />
-                {showConsent && (
-                  <ConsentForm
-                    patientName={intakeData.guardian_name || intakeData.name}
-                    onSigned={(sig) => {
-                      setConsentSigned(true)
-                      console.log(`[consent] Signed as: ${sig} at ${new Date().toISOString()}`)
-                    }}
-                  />
-                )}
-                {consentSigned && (
-                  <div style={{
-                    background: '#f5ede6', border: '1px solid #d4c4bc',
-                    borderRadius: 12, padding: '10px 14px', fontSize: 12,
-                    color: '#6b3d30', maxWidth: 360, alignSelf: 'flex-start',
-                  }}>
-                    Consent received. Your registration is complete — see you at your appointment.
-                  </div>
-                )}
-              </>
+            {showPaymentAction && sessionId && (
+              <PaymentAction sessionId={sessionId} onSessionEnd={restart} />
+            )}
+
+            {status === 'complete' && intakeData && showConsent && (
+              <ConsentForm
+                patientName={intakeData.guardian_name || intakeData.name}
+                onSigned={(sig) => {
+                  setConsentSigned(true)
+                  console.log(`[consent] Signed as: ${sig} at ${new Date().toISOString()}`)
+                }}
+              />
+            )}
+
+            {consentSigned && (
+              <div style={{
+                background: '#f5ede6', border: '1px solid #d4c4bc',
+                borderRadius: 12, padding: '10px 14px', fontSize: 12,
+                color: '#6b3d30', maxWidth: 360, alignSelf: 'flex-start', flexShrink: 0,
+              }}>
+                Consent received. Your registration is complete — see you at your appointment.
+              </div>
             )}
 
             {status === 'staff_requested' && (

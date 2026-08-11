@@ -9,35 +9,19 @@ loop exactly as before.
 IMPORTANT DESIGN NOTE: this does NOT use LangGraph's interrupt() for
 "wait for the next patient message" — an earlier version did, but testing
 revealed that interrupt() re-executes ALL prior code in a node from the
-top on every resume (confirmed directly in LangGraph's own docs: "the
-graph resumes from the start of the node, re-executing all logic"). For a
-node making multiple real Anthropic API calls before reaching interrupt(),
-that would silently re-bill every earlier call on every single patient
-reply — a serious, quietly compounding cost bug.
+top on every resume. Instead, each chat message is its own separate
+graph.ainvoke() call — a node either hands off to another agent within
+the SAME invocation (a redirect, signaled via just_redirected), or the
+invocation simply ENDS once an agent has a plain question for the
+patient. The checkpointer persists current_agent correctly, so the next
+real chat message becomes a fresh, independent invocation that resumes
+at the right agent with no re-execution of anything.
 
-Instead, each chat message is its own separate graph.ainvoke() call,
-exactly like the current non-LangGraph system already works via Redis:
-a node either hands off to another agent within the SAME invocation (a
-redirect, signaled via just_redirected — safe, no re-execution risk
-since it's a normal return, not an interrupt), or the invocation simply
-ENDS once an agent has a plain question for the patient. The checkpointer
-persists current_agent correctly, so the next real chat message becomes
-a fresh, independent invocation that resumes at the right agent with no
-re-execution of anything.
-
-Deliberately keeps every guard function, prompt string, and the raw
-Anthropic SDK call UNCHANGED, imported directly from claude.py and
-orchestrator.py — this file only changes HOW turns are sequenced and
-persisted, not what each agent is allowed to say or how misbehavior gets
-caught. Cache_control is passed exactly as before, since we call the
-Anthropic SDK directly rather than going through LangChain's model
-wrapper — this avoids depending on langchain-anthropic's caching
-middleware working correctly, per the migration-risk discussion.
-
-Uses an in-memory checkpointer for now (MemorySaver) — sufficient for
-unit tests and local dev. Swapping to AsyncPostgresSaver for production
-persistence is a follow-up, one-line change once this core logic is
-verified working.
+PAYMENT NOTE: the payment agent never calls Stripe or redirects anywhere
+after completion — it only saves the record and emits the completion
+JSON. The actual payment link is created entirely outside this graph,
+by a deterministic backend endpoint triggered by a real "Pay now"
+button, with zero AI involvement in that decision.
 """
 import json
 from typing import TypedDict, Optional, Literal
@@ -48,7 +32,6 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from services import orchestrator
 from services.mcp_client import call_tool
-from services.stripe_mcp import create_payment_link_via_mcp
 from services.claude import (
     anthropic_client,
     MODEL,
@@ -97,6 +80,34 @@ SELF_REDIRECT_CORRECTION = (
     "do this once you're actually finished."
 )
 
+# The one, single, fixed "normal completion" target for each agent —
+# matches the exact JSON template hardcoded in each agent's own prompt.
+# Never ambiguous: identity always -> insurance, scheduling always ->
+# payment, etc. Payment has no entry here — it never redirects forward,
+# it only completes. Corrections (going to an EARLIER agent) are the
+# only legitimate exception to this map, and only when the patient's
+# own words actually asked for one — see _patient_requested_correction.
+NEXT_AGENT = {
+    "identity":   "insurance",
+    "insurance":  "routing",
+    "routing":    "scheduling",
+    "scheduling": "payment",
+}
+
+_CORRECTION_SIGNAL_WORDS = [
+    "actually", "wait", "change", "instead", "correct that",
+    "no i meant", "fix that", "go back", "that's wrong",
+]
+
+WRONG_TARGET_CORRECTION = (
+    "You just redirected to '{target}', but the correct next step from "
+    "{agent_name} is '{expected}' — not '{target}'. The patient's last "
+    "message ('{last_message}') was not asking for any correction, so "
+    "this must be your NORMAL completion redirect, which always targets "
+    "'{expected}' from here, with no exceptions. Output the correct "
+    'redirect now: {{"redirect": "{expected}", "reason": "..."}}'
+)
+
 VALID_DEPARTMENTS = [
     "Family Medicine", "OB/GYN", "Cardiology", "Urgent Care",
     "Mental Health", "Dermatology", "Pediatrics",
@@ -120,6 +131,33 @@ def _infer_department_from_messages(messages: list) -> Optional[str]:
             if dept.lower() in content.lower():
                 return dept
     return None
+
+
+def _last_real_patient_message(messages: list) -> str:
+    """
+    Scans backward for the last message that's genuine patient-typed
+    text — role "user" AND a plain string content. NOT just messages[-1]:
+    tool results are also stored as role "user" in this codebase, but
+    with list content (tool_result blocks), not a string. Using the
+    wrong one here would mean checking a tool's output instead of what
+    the patient actually said.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            return msg["content"]
+    return ""
+
+
+def _patient_requested_correction(last_message: str) -> bool:
+    """
+    Deterministic check for genuine correction intent, not the model's
+    own claim about it. If the patient's actual words don't contain any
+    of these signals, a redirect to something other than the expected
+    next agent has no legitimate basis and should be rejected the same
+    way a self-redirect already is.
+    """
+    text = last_message.strip().lower()
+    return any(word in text for word in _CORRECTION_SIGNAL_WORDS)
 
 
 def _make_agent_node(agent_name: str):
@@ -179,7 +217,30 @@ def _make_agent_node(agent_name: str):
                             "content": SELF_REDIRECT_CORRECTION.format(target=target),
                         })
                         continue
+
                     if target in orchestrator.AGENTS:
+                        expected_next = NEXT_AGENT.get(agent_name)
+                        last_message = _last_real_patient_message(messages)
+
+                        is_wrong_target = (
+                            expected_next is not None
+                            and target != expected_next
+                            and not _patient_requested_correction(last_message)
+                        )
+                        if is_wrong_target:
+                            print(f"[graph] REJECTED wrong-target redirect: {agent_name} -> {target} (expected {expected_next})")
+                            messages.append({"role": "assistant", "content": turn_text_without_redirect})
+                            messages.append({
+                                "role": "user",
+                                "content": WRONG_TARGET_CORRECTION.format(
+                                    target=target,
+                                    agent_name=agent_name,
+                                    expected=expected_next,
+                                    last_message=last_message,
+                                ),
+                            })
+                            continue
+
                         print(f"[graph] {agent_name} -> {target} (reason: {parsed_redirect.get('reason')})")
                         new_return_to = agent_name
                         next_agent = target
@@ -258,20 +319,12 @@ def _make_agent_node(agent_name: str):
                     if routing_stall >= 2:
                         # Routing has said the EXACT same thing twice in a
                         # row — genuinely stuck, not just working through
-                        # a legitimate multi-step conversation (department,
-                        # then reason, then a referral check, etc. are all
-                        # DIFFERENT text each time, so they never trigger
-                        # this). Still show what it just said normally
-                        # (don't discard a real reply), but append a clear
-                        # transition and hand off cleanly on the NEXT
-                        # invocation instead of cascading into scheduling
-                        # mid-invocation with incomplete context.
-                        #
-                        # This safety-valve path bypasses the normal
-                        # redirect-JSON department capture above (it never
-                        # emits that JSON), so department falls back to a
-                        # deterministic scan of recent messages instead of
-                        # being silently left null going into scheduling.
+                        # a legitimate multi-step conversation. Still show
+                        # what it just said normally (don't discard a real
+                        # reply), but append a clear transition and hand
+                        # off cleanly on the NEXT invocation instead of
+                        # cascading into scheduling mid-invocation with
+                        # incomplete context.
                         print(f"[graph] FORCED ADVANCE: routing repeated itself {routing_stall}x")
                         transition_text = (
                             turn_text + " Let's go ahead and get you scheduled — "
@@ -382,8 +435,6 @@ def _check_terminal_status(turn_text: str, session_id: str) -> Optional[dict]:
     Parses turn_text for the same terminal-status JSON signals the old
     chat() function checked for at the very end, after the loop exited.
     Returns a state-update dict if a terminal status was found, else None.
-    Payment link creation (deterministic, session_id-linked) happens here,
-    exactly as it did in claude.py's chat().
     """
     crisis_keywords = ["988", "suicide", "crisis lifeline", "911", "immediate danger", "emergency_redirect"]
     is_emergency = (
@@ -430,40 +481,10 @@ def _check_terminal_status(turn_text: str, session_id: str) -> Optional[dict]:
             "final_reply": friendly,
             "data": data,
             "payment": parsed.get("payment", "later"),
-            "payment_url": None,  # resolved separately, see resolve_payment()
+            "payment_url": None,
         }
 
     return None
-
-
-async def resolve_payment(state: IntakeState) -> dict:
-    """
-    Called by the API layer AFTER the graph reaches a "complete" status
-    with payment == "now" — creates the real Stripe link deterministically,
-    exactly as claude.py's chat() did inline. Kept as a separate function
-    (not a graph node) since it's a one-shot side effect after completion,
-    not part of the conversational flow itself.
-    """
-    if state.get("payment") != "now":
-        return {}
-    data = state.get("data") or {}
-    copay_str = data.get("copay", "0")
-    try:
-        copay_cents = int(round(float(copay_str) * 100))
-    except (ValueError, TypeError):
-        copay_cents = 0
-    if copay_cents <= 0:
-        return {}
-    description = (
-        f"{data.get('department', 'Visit')} copay - "
-        f"{data.get('appointment_doctor', '')} "
-        f"{data.get('appointment_date', '')}".strip()
-    )
-    link_result = await create_payment_link_via_mcp(copay_cents, description, state["session_id"])
-    if "url" in link_result:
-        return {"payment_url": link_result["url"]}
-    print(f"[graph] Payment link creation failed, falling back to 'later': {link_result.get('error')}")
-    return {"payment": "later"}
 
 
 def _route_after_agent(state: IntakeState) -> str:

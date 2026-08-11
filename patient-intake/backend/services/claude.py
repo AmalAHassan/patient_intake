@@ -42,11 +42,22 @@ TEMPERATURE         = 0.2
 TOOLS = [
     {
         "name": "get_current_date",
-        "description": "Get today's date and current year. Call this immediately after collecting a patient's date of birth to accurately calculate their age.",
+        "description": "Get today's date and current year. Used for resolving relative date terms like 'tomorrow' or 'next week' when checking appointment slots.",
         "input_schema": {
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    {
+        "name": "calculate_age",
+        "description": "Calculate a patient's exact current age from their date of birth and whether they are a minor. ALWAYS call this instead of computing age yourself — never do the year-subtraction math in your own head, it is easy to get wrong. This is the only source of truth for age.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dob": {"type": "string", "description": "Date of birth in MM/DD/YYYY format, exactly as the patient provided it."},
+            },
+            "required": ["dob"],
         },
     },
     {
@@ -296,6 +307,28 @@ def _strip_leaked_reasoning(text: str) -> str:
     return text
 
 
+_QUESTION_THEN_LIST_ITEM_RE = re.compile(r"(\?)[ \t]+(\d{1,2}\.\s)")
+
+
+def _force_list_item_newline(text: str) -> str:
+    """
+    Deterministic layout fix, not a content fix. The routing and
+    scheduling agents both present numbered lists (departments, slots),
+    and the frontend renders each numbered line as a separate clickable
+    option. Despite explicit prompt instructions and a WRONG example in
+    both ROUTING_PROMPT and SCHEDULING_PROMPT, the model periodically
+    glues the FIRST list item onto the same line as the question that
+    precedes it (e.g. "Which department are you visiting today? 1.
+    Family Medicine\\n2. OB/GYN..."). Items 2+ already have their own
+    newline, so only item 1 silently loses its clickability — a real
+    but easy-to-miss feature bug, since the text still reads fine to a
+    human. This is purely a text-layout problem, not a judgment call, so
+    it's more reliable to fix it mechanically than to re-loop the model
+    and hope it reformats correctly this time.
+    """
+    return _QUESTION_THEN_LIST_ITEM_RE.sub(r"\1\n\2", text)
+
+
 _TIME_RE = re.compile(r"\d{1,2}:\d{2}\s*(am|pm)", re.IGNORECASE)
 _SLOT_CONTEXT_RE = re.compile(
     r"(dr\.\s*\w+|\bdoctor\b|"
@@ -362,6 +395,60 @@ def _is_routing_agent_straying_into_scheduling(text: str) -> bool:
     return any(m in lower for m in _ROUTING_STRAYING_MARKERS)
 
 
+_MINOR_DETERMINATION_MARKERS = [
+    "under 18", "years old", "guardian's full name", "legal guardian",
+    "parent or legal guardian",
+]
+
+
+def _is_identity_agent_skipping_age_tool(text: str, age_tool_used_this_turn: bool) -> bool:
+    """
+    The minor check used to have the model do its own year-subtraction
+    arithmetic and it was unreliable — wrong current year assumed, wrong
+    handling of whether the birthday had passed yet, sometimes both in
+    the same conversation. IDENTITY_PROMPT now requires calling
+    `calculate_age` and trusting its `is_minor` field instead of doing
+    any math itself. This is a deterministic backstop for the case where
+    the model states an age-based determination (minor, guardian
+    questions, restating an age) without having actually called that
+    tool this turn — i.e. it's guessing again instead of using the tool.
+    """
+    if age_tool_used_this_turn:
+        return False
+    lower = text.lower()
+    return any(m in lower for m in _MINOR_DETERMINATION_MARKERS)
+
+
+_AGE_REVERIFY_MARKERS = [
+    "verify your age", "confirm your date of birth is",
+    "reconfirm your date of birth", "double check your age",
+    "double-check your age", "make sure i have everything right",
+]
+_NOT_A_MINOR_MARKERS = [
+    "not a minor", "i'm not", "im not", "i am not",
+]
+
+
+def _is_identity_needlessly_reverifying_age(text: str, state: dict, user_message: str) -> bool:
+    """
+    Once age_checked is set in state, the identity agent should not ask
+    the patient to confirm/reconfirm/verify their DOB again — with one
+    exception: if the patient just said they're not a minor (in response
+    to being asked for guardian info), the prompt explicitly allows
+    asking them to re-enter their DOB and checking again. This backstop
+    blocks every other re-ask of this shape.
+    """
+    if not state.get("age_checked"):
+        return False
+    lower = text.lower()
+    if not any(m in lower for m in _AGE_REVERIFY_MARKERS):
+        return False
+    um_lower = (user_message or "").lower()
+    if any(m in um_lower for m in _NOT_A_MINOR_MARKERS):
+        return False
+    return True
+
+
 _REDIRECT_JSON_RE = re.compile(r'\{\s*"redirect"\s*:.*?\}', re.DOTALL)
 
 
@@ -386,6 +473,31 @@ def _extract_redirect(text: str) -> tuple[dict | None, str]:
     return parsed, remaining
 
 
+def _calculate_age(dob_str: str) -> str:
+    """
+    Deterministic replacement for the model doing age math itself. Given
+    a DOB in MM/DD/YYYY (the format IDENTITY_PROMPT always asks for),
+    returns the exact current age and whether the patient is a minor,
+    computed with real Python date arithmetic instead of relying on the
+    model to compute a correct current year and correctly handle whether
+    the birthday has passed yet this year.
+    """
+    try:
+        month, day, year = (int(p) for p in dob_str.strip().split("/"))
+        birth = date(year, month, day)
+        today = date.today()
+        age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+        result = {"age": age, "is_minor": age < 18}
+        print(f"[intake] calculate_age({dob_str}) -> {result}")
+        return json.dumps(result)
+    except Exception as e:
+        print(f"[intake] calculate_age({dob_str!r}) failed: {e}")
+        return json.dumps({
+            "error": "Could not parse that date of birth. Ask the patient "
+                     "to reconfirm it in MM/DD/YYYY format."
+        })
+
+
 async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -> dict:
     history_key    = f"session:{session_id}:history"
     collected_key  = f"session:{session_id}:collected"
@@ -403,6 +515,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
     reply_segments = []
     lookup_count   = 0
     slots_tool_used_this_turn = False
+    age_tool_used_this_turn   = False
 
     for _ in range(MAX_TOOL_ITERATIONS):
         active_agent = orchestrator.get_active_agent(state)
@@ -430,6 +543,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                 b.text for b in response.content if b.type == "text"
             ).strip()
             turn_text = _strip_leaked_reasoning(turn_text)
+            turn_text = _force_list_item_newline(turn_text)
             turn_text = await _reflect(turn_text, history)
             print(f"[orchestrator] {active_agent} said: {turn_text[:200]!r}")
 
@@ -479,13 +593,27 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                     and not handled_redirect
                     and _is_routing_agent_straying_into_scheduling(turn_text)
                 )
-                if is_fabricated_slots or is_asking_before_tool or is_routing_straying:
+                is_guessing_age = (
+                    active_agent == "identity"
+                    and not handled_redirect
+                    and _is_identity_agent_skipping_age_tool(turn_text, age_tool_used_this_turn)
+                )
+                is_needless_reverify = (
+                    active_agent == "identity"
+                    and not handled_redirect
+                    and _is_identity_needlessly_reverifying_age(turn_text, state, user_message)
+                )
+                if is_fabricated_slots or is_asking_before_tool or is_routing_straying or is_guessing_age or is_needless_reverify:
                     if is_fabricated_slots:
                         reason = "fabricated slots without calling fhir_get_slots"
                     elif is_asking_before_tool:
                         reason = "asking day/time preference before calling fhir_get_slots"
-                    else:
+                    elif is_routing_straying:
                         reason = "routing asking scheduling questions instead of handing off"
+                    elif is_guessing_age:
+                        reason = "stating a minor/age determination without calling calculate_age"
+                    else:
+                        reason = "needlessly re-verifying age after it was already checked"
                     print(f"[orchestrator] REJECTED ({reason}): {turn_text[:150]}")
                     history.append({"role": "assistant", "content": turn_text})
                     if is_fabricated_slots:
@@ -502,7 +630,7 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                             "whatever real slots it returns; THEN you can ask if they'd "
                             "like something different."
                         )
-                    else:
+                    elif is_routing_straying:
                         correction = (
                             "You are the routing agent — you have no scheduling tools "
                             "and cannot show appointment times or availability. You "
@@ -510,6 +638,23 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                             "day/time preference or offer to show available slots — "
                             "output ONLY the redirect JSON to hand off to scheduling "
                             "now: {\"redirect\": \"scheduling\", \"reason\": \"routing complete\"}"
+                        )
+                    elif is_guessing_age:
+                        correction = (
+                            "You just made a minor/age determination (mentioned being "
+                            "under 18, years old, or guardian requirements) without "
+                            "calling calculate_age this turn. Never compute age "
+                            "yourself. Call calculate_age now with the patient's DOB "
+                            "exactly as given, then base your response only on its "
+                            "is_minor field."
+                        )
+                    else:
+                        correction = (
+                            "You already checked this patient's age earlier in this "
+                            "conversation and they haven't said they're not a minor — "
+                            "do not ask them to verify or reconfirm their date of "
+                            "birth. Continue with whatever comes next in the normal "
+                            "flow instead."
                         )
                     history.append({"role": "user", "content": correction})
                     continue
@@ -543,6 +688,8 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                 print(f"[scheduling] fhir_get_slots called — input: {block.input}")
                 slots_tool_used_this_turn = True
                 state["slots_ever_called"] = True
+            elif block_type == "tool_use" and block_name == "calculate_age":
+                age_tool_used_this_turn = True
             elif block_type == "tool_use":
                 print(f"[tool] {active_agent} called {block_name} — input: {block.input}")
 
@@ -565,6 +712,15 @@ async def chat(session_id: str, user_message: str, client_ip: str = "unknown") -
                     "day":   today.day,
                 })
                 print(f"[intake] get_current_date → {today.isoformat()}")
+            elif block.name == "calculate_age":
+                content = _calculate_age(block.input.get("dob", ""))
+                try:
+                    parsed_age = json.loads(content)
+                    if "error" not in parsed_age:
+                        state["age_checked"] = True
+                        state["is_minor"] = parsed_age.get("is_minor", False)
+                except json.JSONDecodeError:
+                    pass
             elif block.name == "lookup_patient" and lookup_count > MAX_LOOKUP_RETRIES:
                 content = "MAX_RETRIES_EXCEEDED — tell the patient a staff member will assist them."
             else:

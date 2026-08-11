@@ -21,6 +21,7 @@ class Patient(Base):
     dob = Column(String)
     phone = Column(String)
     email = Column(String, index=True)
+    address = Column(String)
 
 
     # Insurance

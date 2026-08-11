@@ -8,8 +8,9 @@ from services import fhir_client
 from services.sms import send_appointment_confirmation
 from services.claude import _send_crisis_alert
 from services.mcp_client import call_tool
+from services.stripe_mcp import create_payment_link_via_mcp
 from models import SessionLocal, IntakeSession, Patient
-from graph import graph, resolve_payment
+from graph import graph
 
 router = APIRouter()
 
@@ -33,6 +34,10 @@ class QuickSlotsRequest(BaseModel):
     day: Optional[str] = None
     after_time: Optional[str] = None
     before_time: Optional[str] = None
+
+
+class CreateIntakePaymentLinkRequest(BaseModel):
+    session_id: str
 
 
 def _config_for(session_id: str) -> dict:
@@ -144,6 +149,7 @@ async def send_message(request: MessageRequest, req: Request):
                     dob=collected_data.get("dob"),
                     phone=collected_data.get("phone"),
                     email=collected_data.get("email"),
+                    address=collected_data.get("address"),
                     insurance_id=collected_data.get("insurance_id"),
                     payer=collected_data.get("payer"),
                     copay=collected_data.get("copay"),
@@ -170,9 +176,12 @@ async def send_message(request: MessageRequest, req: Request):
             finally:
                 db.close()
 
-            payment_result = await resolve_payment(result)
-            payment_url = payment_result.get("payment_url")
-            payment_choice = payment_result.get("payment", result.get("payment", "later"))
+            # No resolve_payment() call anymore — payment is no longer
+            # decided or triggered from chat at all. PAYMENT_PROMPT
+            # always emits "payment": "later" now; the real trigger is
+            # the deterministic /intake/create-payment-link endpoint,
+            # fired directly by a real button click in the frontend,
+            # with zero AI involvement in that decision.
 
             send_appointment_confirmation(
                 to_number=collected_data.get("phone", ""),
@@ -189,8 +198,6 @@ async def send_message(request: MessageRequest, req: Request):
                 "data": collected_data,
                 "patient_id": patient_id,
                 "fhir_id": fhir_id,
-                "payment": payment_choice,
-                "payment_url": payment_url,
                 "current_agent": current_agent,
             }
 
@@ -215,6 +222,7 @@ def _format_slots_message(slots: list) -> str:
         for i, s in enumerate(slots[:5])
     ]
     return "\n".join(lines)
+
 
 @router.post("/quick-slots")
 async def quick_slots(request: QuickSlotsRequest):
@@ -267,6 +275,52 @@ async def quick_slots(request: QuickSlotsRequest):
     )
 
     return {"reply": reply_text}
+
+
+@router.post("/create-payment-link")
+async def create_intake_payment_link(body: CreateIntakePaymentLinkRequest):
+    """
+    Deterministic — no AI anywhere in this path. Mirrors
+    /portal/create-payment-link exactly. Removes the AI from the actual
+    trigger decision entirely: clicking this button in the frontend
+    calls this endpoint directly, the same way a normal checkout page's
+    "Pay Now" button would, rather than sending "pay now" into chat for
+    a model to interpret.
+
+    Uses session_id as the Stripe metadata reference — already fully
+    consistent with the webhook's existing resolution logic in
+    payment.py, which already tries IntakeSession lookup by session_id
+    first before falling back to a direct patient_id. No webhook
+    changes needed.
+    """
+    db = SessionLocal()
+    try:
+        session = db.query(IntakeSession).filter(
+            IntakeSession.session_id == body.session_id
+        ).first()
+        if not session or not session.patient_id:
+            raise HTTPException(status_code=404, detail="Session not found or not yet complete")
+
+        patient = db.query(Patient).filter(Patient.id == session.patient_id).first()
+    finally:
+        db.close()
+
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    try:
+        copay_cents = int(round(float(patient.copay or "0") * 100))
+    except (ValueError, TypeError):
+        copay_cents = 0
+    if copay_cents <= 0:
+        raise HTTPException(status_code=400, detail="No copay due")
+
+    description = f"{patient.department or 'Visit'} copay"
+    link_result = await create_payment_link_via_mcp(copay_cents, description, body.session_id)
+    if "url" not in link_result:
+        raise HTTPException(status_code=502, detail=link_result.get("error", "Could not create payment link"))
+
+    return {"url": link_result["url"]}
 
 
 @router.get("/session/{session_id}")

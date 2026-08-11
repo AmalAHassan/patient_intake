@@ -68,16 +68,23 @@ def test_advance_or_return_noop_when_nothing_to_return_to():
 
 def test_get_tools_for_agent_scopes_correctly():
     all_tools = [
+        {"name": "calculate_age"},
         {"name": "get_current_date"},
         {"name": "lookup_patient"},
         {"name": "check_eligibility"},
         {"name": "fhir_get_slots"},
         {"name": "fhir_create_patient"},
     ]
+    # identity now uses calculate_age (deterministic age/is_minor lookup)
+    # instead of get_current_date + model-side arithmetic — see
+    # IDENTITY_PROMPT's MINOR CHECK section for why that changed.
     identity_tools = orchestrator.get_tools_for_agent("identity", all_tools)
     names = {t["name"] for t in identity_tools}
-    assert names == {"get_current_date", "lookup_patient"}
+    assert names == {"calculate_age", "lookup_patient"}
 
+    # scheduling is unaffected by that change — still needs
+    # get_current_date for translating "tomorrow"/"next week" etc. into
+    # concrete dates before calling fhir_get_slots.
     scheduling_tools = orchestrator.get_tools_for_agent("scheduling", all_tools)
     names = {t["name"] for t in scheduling_tools}
     assert names == {"get_current_date", "fhir_get_slots"}
@@ -87,12 +94,12 @@ def test_get_tools_for_agent_skips_entries_without_name():
     """Regression test — this exact bug crashed the app once: an
     mcp_toolset entry has no 'name' key, only 'mcp_server_name'."""
     all_tools = [
-        {"name": "get_current_date"},
+        {"name": "calculate_age"},
         {"type": "mcp_toolset", "mcp_server_name": "stripe"},  # no "name" key
     ]
     # Should not raise KeyError
     result = orchestrator.get_tools_for_agent("identity", all_tools)
-    assert result == [{"name": "get_current_date"}]
+    assert result == [{"name": "calculate_age"}]
 
 
 def test_routing_agent_has_no_tools():

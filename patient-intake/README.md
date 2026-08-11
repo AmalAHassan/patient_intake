@@ -2,7 +2,7 @@
 
 Conversational AI that guides patients through registration, insurance verification, department routing, and appointment booking — in one chat conversation.
 
-**Built on:** Claude Haiku · HAPI FHIR · FastAPI · Next.js · PostgreSQL · Stripe  
+**Built on:** Claude Haiku · HAPI FHIR · FastAPI · Next.js · PostgreSQL · Stripe
 **Compliance:** HIPAA-compliant infrastructure · NIST IAL2 identity · Audit logging
 
 ---
@@ -36,7 +36,9 @@ A patient opens the app and has a natural conversation with an AI front-desk rec
 - Docker Desktop (must be running)
 - An [Anthropic API key](https://console.anthropic.com)
 - A [Stripe account](https://dashboard.stripe.com) (test mode is fine)
+- The [Stripe CLI](https://docs.stripe.com/stripe-cli) (for local webhook testing)
 - A Gmail account with an [App Password](https://myaccount.google.com/apppasswords) for email receipts
+- A GitHub account with SSH access configured (`~/.ssh/id_ed25519`) if you plan to push changes
 
 ---
 
@@ -45,7 +47,7 @@ A patient opens the app and has a natural conversation with an AI front-desk rec
 ### 1. Clone and enter the project
 
 ```bash
-git clone https://github.com/AmalAHassan/patient_intake.git
+git clone git@github.com:AmalAHassan/patient_intake.git
 cd patient_intake/patient-intake
 ```
 
@@ -65,11 +67,14 @@ FHIR_BASE_URL=http://localhost:8080/fhir
 
 STRIPE_SECRET_KEY=sk_test_...
 STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
 
 GMAIL_USER=your@gmail.com
 GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 DEV_NOTIFY_EMAIL=your@gmail.com
 ```
+
+> `STRIPE_WEBHOOK_SECRET` is generated when you run `stripe listen` (see Terminal 4 below) — copy it in after your first run.
 
 ### 3. Set up the Python backend
 
@@ -98,11 +103,36 @@ npm install
 cd ..
 ```
 
+### 6. Install and set up the Stripe CLI
+
+The Stripe CLI lets you forward live webhook events to your local backend so payment confirmations work in development.
+
+**macOS (Homebrew):**
+```bash
+brew install stripe/stripe-cli/stripe
+```
+
+**Windows (Scoop):**
+```bash
+scoop bucket add stripe https://github.com/stripe/scoop-bucket.git
+scoop install stripe
+```
+
+**Linux:** download the latest binary from the [Stripe CLI releases page](https://github.com/stripe/stripe-cli/releases) and add it to your `PATH`.
+
+Then authenticate once:
+
+```bash
+stripe login
+```
+
+This opens a browser window to link the CLI to your Stripe account. You only need to do this once per machine.
+
 ---
 
 ## Running the app
 
-You need **three terminals** open at the same time.
+You need **four terminals** open at the same time.
 
 **Terminal 1 — start the databases:**
 
@@ -138,13 +168,28 @@ npm run dev
 
 Open **http://localhost:3000** in your browser.
 
+**Terminal 4 — forward Stripe webhooks:**
+
+```bash
+stripe listen --forward-to localhost:8000/payment/webhook
+```
+
+This prints a webhook signing secret (`whsec_...`) the first time you run it — copy that value into `STRIPE_WEBHOOK_SECRET` in your `.env` and restart the backend (Terminal 2) so it picks up the change. Leave this terminal running any time you're testing a payment; without it, Stripe events (like `payment_intent.succeeded`) never reach your local backend.
+
+To fire a one-off test event without going through the UI:
+
+```bash
+stripe trigger payment_intent.succeeded
+```
+
 ---
 
 ## Stopping everything
 
 ```bash
-# Stop frontend — Ctrl+C in Terminal 3
-# Stop backend — Ctrl+C in Terminal 2
+# Stop frontend        — Ctrl+C in Terminal 3
+# Stop backend         — Ctrl+C in Terminal 2
+# Stop Stripe listener — Ctrl+C in Terminal 4
 
 # Stop databases
 docker-compose down
@@ -189,24 +234,24 @@ patient-intake/
 │
 └── backend/
     ├── main.py                 # FastAPI entry point
-    ├── config.py               # reads .env
-    ├── models.py               # PostgreSQL models (Patient, IntakeSession)
-    ├── requirements.txt        # Python dependencies
+    ├── config.py                # reads .env
+    ├── models.py                # PostgreSQL models (Patient, IntakeSession)
+    ├── requirements.txt         # Python dependencies
     ├── routes/
-    │   ├── intake.py           # /intake/start, /intake/message
-    │   └── payment.py          # /payment/create-intent, /payment/confirm, /portal/lookup
+    │   ├── intake.py             # /intake/start, /intake/message
+    │   └── payment.py            # /payment/create-intent, /payment/confirm, /payment/webhook, /portal/lookup
     ├── services/
-    │   ├── claude.py           # conversation loop + tool execution + system prompt
-    │   ├── mcp_client.py       # routes tool calls to local MCP servers
-    │   ├── fhir_client.py      # writes to HAPI FHIR
-    │   ├── sms.py              # email confirmations + payment receipts (Gmail SMTP)
-    │   └── patient_lookup.py   # looks up patients from CSV
+    │   ├── claude.py              # conversation loop + tool execution + system prompt
+    │   ├── mcp_client.py          # routes tool calls to local MCP servers
+    │   ├── fhir_client.py         # writes to HAPI FHIR
+    │   ├── sms.py                 # email confirmations + payment receipts (Gmail SMTP)
+    │   └── patient_lookup.py      # looks up patients from CSV
     ├── mcp_servers/
-    │   ├── patient_lookup/     # looks up patient records
-    │   ├── eligibility/        # insurance eligibility check
-    │   └── hapi_fhir/          # FHIR read/write
+    │   ├── patient_lookup/        # looks up patient records
+    │   ├── eligibility/           # insurance eligibility check
+    │   └── hapi_fhir/             # FHIR read/write
     └── data/
-        └── patients_enriched.csv   # synthetic patient data for testing
+        └── patients_enriched.csv  # synthetic patient data for testing
 ```
 
 ---
@@ -221,6 +266,7 @@ patient-intake/
 | `FHIR_BASE_URL` | ✅ | HAPI FHIR URL (default: localhost:8080/fhir) |
 | `STRIPE_SECRET_KEY` | ✅ | Stripe secret key (test or live) |
 | `STRIPE_PUBLISHABLE_KEY` | ✅ | Stripe publishable key |
+| `STRIPE_WEBHOOK_SECRET` | ✅ | Printed by `stripe listen` — see Terminal 4 |
 | `GMAIL_USER` | ✅ | Gmail address for sending confirmations |
 | `GMAIL_APP_PASSWORD` | ✅ | Gmail app password (not your real password) |
 | `DEV_NOTIFY_EMAIL` | ✅ | Where to send receipts in dev |
@@ -242,7 +288,7 @@ CVC:          123
 ZIP:          10001
 ```
 
-This always succeeds. No real money is charged.
+This always succeeds. No real money is charged. With Terminal 4's `stripe listen` running, the resulting webhook event will reach your backend and trigger the receipt email automatically.
 
 ---
 
@@ -327,6 +373,7 @@ In production: replace the mock handler in `crisis_notifier.py` with real dispat
 | POST | `/intake/message` | Send a message, get a reply |
 | POST | `/payment/create-intent` | Create Stripe payment intent |
 | POST | `/payment/confirm` | Confirm payment + send receipt |
+| POST | `/payment/webhook` | Receives forwarded Stripe events (see Terminal 4) |
 | POST | `/portal/lookup` | Look up patient appointments by name + DOB |
 | GET | `/payment/publishable-key` | Get Stripe publishable key |
 | GET | `/health` | Health check |
@@ -334,21 +381,56 @@ In production: replace the mock handler in `crisis_notifier.py` with real dispat
 
 ---
 
+## Pushing changes to GitHub
+
+This repo is authenticated over SSH, so make sure your key is loaded before pushing:
+
+```bash
+ssh-add ~/.ssh/id_ed25519
+ssh -T git@github.com   # should greet you by username if the key works
+```
+
+Always run git commands from inside the repo root (`patient_intake/`), not a parent folder — running `git add .` from an outer directory can accidentally sweep up unrelated or nested repos.
+
+```bash
+cd patient_intake
+
+# check what changed
+git status
+
+# stage and commit
+git add .
+git commit -m "Describe your change here"
+
+# push to the dev2 branch
+git push origin dev2
+```
+
+If this is a brand-new branch that doesn't exist on the remote yet:
+
+```bash
+git push -u origin dev2
+```
+
+Railway is configured for git-push-to-deploy, so pushing to `dev2` will automatically trigger a redeploy of the `patient_intake` (backend) and `delightful-communication` (frontend) services on Railway — no separate deploy step needed.
+
+---
+
 ## Common problems
 
-**`make: pip: No such file or directory`**  
+**`make: pip: No such file or directory`**
 Activate the venv first: `source backend/.venv/bin/activate`
 
-**`Cannot connect to backend`**  
+**`Cannot connect to backend`**
 Make sure `make dev` is running. Check [http://localhost:8000/docs](http://localhost:8000/docs) to verify FastAPI is up.
 
-**`Patient not found`**  
+**`Patient not found`**
 The lookup reads from `backend/data/patients_enriched.csv`. Make sure the file exists and has rows.
 
-**`FHIR write failed`**  
+**`FHIR write failed`**
 Make sure Docker is running: `docker-compose up -d`. Check [http://localhost:8080](http://localhost:8080) to verify HAPI FHIR is up. It takes ~20 seconds to start.
 
-**`column patients.payment_date does not exist`**  
+**`column patients.payment_date does not exist`**
 The DB schema is out of date. Recreate tables:
 ```bash
 cd backend
@@ -363,8 +445,14 @@ lsof -ti:5001,5002,5003,8000,8001 | xargs kill -9 2>/dev/null; true
 make dev
 ```
 
-**`Payment confirm returns 400`**  
+**`Payment confirm returns 400`**
 Check that `payment_date` column exists in the DB. If not, recreate tables as above.
+
+**Payments succeed in the UI but no receipt email arrives**
+Make sure Terminal 4 (`stripe listen --forward-to localhost:8000/payment/webhook`) is running and that `STRIPE_WEBHOOK_SECRET` in `.env` matches the value it printed. Restart the backend after changing `.env`.
+
+**`git push` hangs or fails with SSL/RPC errors**
+Use the SSH remote (`git@github.com:AmalAHassan/patient_intake.git`), not HTTPS — HTTPS has caused SSL/RPC errors on this repo due to its size.
 
 ---
 
