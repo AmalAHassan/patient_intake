@@ -22,6 +22,11 @@ after completion — it only saves the record and emits the completion
 JSON. The actual payment link is created entirely outside this graph,
 by a deterministic backend endpoint triggered by a real "Pay now"
 button, with zero AI involvement in that decision.
+
+AGE NOTE: calculate_age is deliberately handled directly in this file's
+tool-execution loop (like get_current_date), NOT routed through
+mcp_client.py — age math has nothing to do with external FHIR/insurance
+systems, so treating it as an MCP tool call was wrong.
 """
 import json
 from typing import TypedDict, Optional, Literal
@@ -40,11 +45,17 @@ from services.claude import (
     MAX_TOOL_ITERATIONS,
     MAX_LOOKUP_RETRIES,
     _strip_leaked_reasoning,
+    _force_list_item_newline,
     _reflect,
     _extract_redirect,
     _is_scheduling_agent_fabricating,
     _is_scheduling_agent_asking_before_tool,
     _is_routing_agent_straying_into_scheduling,
+    _is_identity_agent_skipping_age_tool,
+    _is_identity_needlessly_reverifying_age,
+    _is_new_patient_path,
+    _is_masking_new_patient_data,
+    _calculate_age,
     _block_to_dict,
 )
 
@@ -54,6 +65,7 @@ class IntakeState(TypedDict):
     current_agent: str
     return_to: Optional[str]
     slots_ever_called: bool
+    age_checked: bool
     routing_turns_without_redirect: int
     last_routing_reply: str
     department: Optional[str]
@@ -78,6 +90,31 @@ SELF_REDIRECT_CORRECTION = (
     "needed from the patient, and as soon as you are done, output the "
     "redirect to the correct NEXT (different) agent — do not hesitate to "
     "do this once you're actually finished."
+)
+
+AGE_GUESS_CORRECTION = (
+    "You just asked about age, 18, or date-of-birth verification, or "
+    "stated a minor/guardian determination — without calling "
+    "calculate_age this turn. Never ask the patient to confirm their age "
+    "or DOB, and never guess or compute it yourself. Call calculate_age "
+    "now with their DOB exactly as already given, then base your next "
+    "message only on its is_minor field, silently."
+)
+
+AGE_REVERIFY_CORRECTION = (
+    "You already checked this patient's age earlier in this conversation "
+    "and they haven't said they're not a minor — do not ask them to "
+    "verify or reconfirm their date of birth. Continue with whatever "
+    "comes next in the normal flow instead."
+)
+
+MASKING_NEW_PATIENT_CORRECTION = (
+    "This patient was NOT FOUND in the lookup — they typed their own "
+    "phone and email THIS SAME conversation. You just masked one of them "
+    "(\"ending in XXXX\" or \"abc****@domain\") — that format is WRONG "
+    "here; it only applies to RETURNING patients confirming an existing "
+    "record. Show phone and email in FULL, exactly as typed, and ask "
+    "again."
 )
 
 # The one, single, fixed "normal completion" target for each agent —
@@ -172,12 +209,15 @@ def _make_agent_node(agent_name: str):
         messages = list(state["messages"])
         lookup_count = state.get("lookup_count", 0)
         slots_ever_called = state.get("slots_ever_called", False)
+        age_checked = state.get("age_checked", False)
         routing_stall = state.get("routing_turns_without_redirect", 0)
 
         system = orchestrator.build_system_prompt(agent_name)
         scoped_tools = orchestrator.get_tools_for_agent(agent_name, TOOLS)
 
         for _ in range(MAX_TOOL_ITERATIONS):
+            age_tool_used_this_turn = False
+
             response = anthropic_client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
@@ -198,6 +238,7 @@ def _make_agent_node(agent_name: str):
                     b.text for b in response.content if b.type == "text"
                 ).strip()
                 turn_text = _strip_leaked_reasoning(turn_text)
+                turn_text = _force_list_item_newline(turn_text)
                 turn_text = await _reflect(turn_text, messages)
                 print(f"[graph] {agent_name} said: {turn_text[:200]!r}")
 
@@ -251,6 +292,8 @@ def _make_agent_node(agent_name: str):
                             captured_department = parsed_redirect["department"]
 
                 if turn_text:
+                    last_message = _last_real_patient_message(messages)
+
                     is_fabricated_slots = (
                         agent_name == "scheduling"
                         and _is_scheduling_agent_fabricating(turn_text, slots_ever_called)
@@ -266,7 +309,23 @@ def _make_agent_node(agent_name: str):
                         and not handled_redirect
                         and _is_routing_agent_straying_into_scheduling(turn_text)
                     )
-                    if is_fabricated_slots or is_asking_before_tool or is_routing_straying:
+                    is_guessing_age = (
+                        agent_name == "identity"
+                        and not handled_redirect
+                        and _is_identity_agent_skipping_age_tool(turn_text, age_tool_used_this_turn)
+                    )
+                    is_needless_reverify = (
+                        agent_name == "identity"
+                        and not handled_redirect
+                        and _is_identity_needlessly_reverifying_age(turn_text, age_checked, last_message)
+                    )
+                    is_masking_new_patient = (
+                        agent_name == "identity"
+                        and not handled_redirect
+                        and _is_masking_new_patient_data(turn_text, _is_new_patient_path(messages))
+                    )
+                    if (is_fabricated_slots or is_asking_before_tool or is_routing_straying
+                            or is_guessing_age or is_needless_reverify or is_masking_new_patient):
                         if is_fabricated_slots:
                             correction = (
                                 "You mentioned specific doctors, dates, or times without "
@@ -281,7 +340,7 @@ def _make_agent_node(agent_name: str):
                                 "whatever real slots it returns; THEN you can ask if "
                                 "they'd like something different."
                             )
-                        else:
+                        elif is_routing_straying:
                             correction = (
                                 "You are the routing agent — you have no scheduling "
                                 "tools and cannot show appointment times or availability. "
@@ -289,6 +348,12 @@ def _make_agent_node(agent_name: str):
                                 "redirect JSON to hand off to scheduling now: "
                                 '{"redirect": "scheduling", "reason": "routing complete"}'
                             )
+                        elif is_guessing_age:
+                            correction = AGE_GUESS_CORRECTION
+                        elif is_needless_reverify:
+                            correction = AGE_REVERIFY_CORRECTION
+                        else:
+                            correction = MASKING_NEW_PATIENT_CORRECTION
                         print(f"[graph] REJECTED (guard triggered): {turn_text[:150]}")
                         messages.append({"role": "assistant", "content": turn_text})
                         messages.append({"role": "user", "content": correction})
@@ -307,6 +372,7 @@ def _make_agent_node(agent_name: str):
                         "routing_turns_without_redirect": 0,
                         "department": captured_department,
                         "slots_ever_called": slots_ever_called,
+                        "age_checked": age_checked,
                         "lookup_count": lookup_count,
                         "just_redirected": True,
                     }
@@ -339,6 +405,7 @@ def _make_agent_node(agent_name: str):
                             "last_routing_reply": "",
                             "department": captured_department or _infer_department_from_messages(messages),
                             "slots_ever_called": slots_ever_called,
+                            "age_checked": age_checked,
                             "lookup_count": lookup_count,
                             "just_redirected": False,
                             "final_reply": transition_text,
@@ -352,6 +419,7 @@ def _make_agent_node(agent_name: str):
                         "current_agent": agent_name,
                         "routing_turns_without_redirect": routing_stall,
                         "slots_ever_called": slots_ever_called,
+                        "age_checked": age_checked,
                         "lookup_count": lookup_count,
                         "just_redirected": False,
                         **terminal,
@@ -371,6 +439,7 @@ def _make_agent_node(agent_name: str):
                     "last_routing_reply": turn_text if agent_name == "routing" else state.get("last_routing_reply", ""),
                     "department": captured_department,
                     "slots_ever_called": slots_ever_called,
+                    "age_checked": age_checked,
                     "lookup_count": lookup_count,
                     "just_redirected": False,
                     "final_reply": turn_text,
@@ -383,6 +452,8 @@ def _make_agent_node(agent_name: str):
                 if block_type == "tool_use" and block_name == "fhir_get_slots":
                     print(f"[graph] fhir_get_slots called — input: {block.input}")
                     slots_ever_called = True
+                elif block_type == "tool_use" and block_name == "calculate_age":
+                    age_tool_used_this_turn = True
                 elif block_type == "tool_use":
                     print(f"[tool] {agent_name} called {block_name} — input: {block.input}")
                 if getattr(block, "name", "") == "lookup_patient":
@@ -400,6 +471,17 @@ def _make_agent_node(agent_name: str):
                         "today": today.isoformat(), "year": today.year,
                         "month": today.month, "day": today.day,
                     })
+                elif block.name == "calculate_age":
+                    # Handled directly here, NOT via call_tool()/mcp_client.py
+                    # — age math has nothing to do with external FHIR/
+                    # insurance systems.
+                    content = _calculate_age(block.input.get("dob", ""))
+                    try:
+                        parsed_age = json.loads(content)
+                        if "error" not in parsed_age:
+                            age_checked = True
+                    except json.JSONDecodeError:
+                        pass
                 elif block.name == "lookup_patient" and lookup_count > MAX_LOOKUP_RETRIES:
                     content = "MAX_RETRIES_EXCEEDED — tell the patient a staff member will assist them."
                 else:
@@ -422,6 +504,7 @@ def _make_agent_node(agent_name: str):
             "messages": messages,
             "current_agent": agent_name,
             "slots_ever_called": slots_ever_called,
+            "age_checked": age_checked,
             "lookup_count": lookup_count,
             "just_redirected": False,
             "final_reply": fallback,
