@@ -10,6 +10,7 @@ When deploying:
   3. Delete this file — Anthropic handles routing directly
 """
 import json
+import os
 import httpx
 import asyncio
 import re
@@ -35,11 +36,13 @@ EHR_HTTP_PORTS = {
 }
 
 MCP_SERVER_URLS = {
-    "lookup_patient":      "http://localhost:5101",
-    "check_eligibility":   "http://localhost:5102",
-    "fhir_get_slots":      f"http://localhost:{EHR_HTTP_PORTS[EHR_BACKEND]}",
-    "fhir_create_patient": f"http://localhost:{EHR_HTTP_PORTS[EHR_BACKEND]}",
+    "lookup_patient":      os.getenv("MCP_PATIENT_LOOKUP_URL", "http://localhost:5101"),
+    "check_eligibility":   os.getenv("MCP_ELIGIBILITY_URL", "http://localhost:5102"),
+    "fhir_get_slots":      os.getenv("MCP_EHR_URL", f"http://localhost:{EHR_HTTP_PORTS[EHR_BACKEND]}"),
+    "fhir_create_patient": os.getenv("MCP_EHR_URL", f"http://localhost:{EHR_HTTP_PORTS[EHR_BACKEND]}"),
 }
+
+
 
 
 # ── Slot generator — mirrors hapi_fhir/server.py's logic exactly, so the
