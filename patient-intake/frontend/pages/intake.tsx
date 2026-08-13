@@ -299,17 +299,25 @@ function ConsentForm({ patientName, onSigned }: { patientName: string; onSigned:
   )
 }
 
-// Pay Now half of the payment action — unchanged behavior (real tab,
-// real polling), but now reports upward via onStart the MOMENT the
-// patient commits to this path, so the sibling Pay Later button can
-// hide itself rather than sitting there as a conflicting option once
-// a real payment attempt is underway.
-function IntakePayNowButton({ sessionId, onStart }: { sessionId: string; onStart: () => void }) {
+// Pay Now half of the payment action. Tracks the opened tab in a ref so
+// the polling loop can check whether it's still open. Real payment
+// status is ALWAYS checked first, tab-closed check SECOND — a closed
+// tab only means anything once we've confirmed via the status check
+// that payment genuinely hasn't succeeded; otherwise we might treat a
+// patient closing the tab right after a successful payment as a
+// failure, when our own payment-complete page explicitly told them
+// it's fine to close it at that point.
+function IntakePayNowButton({ sessionId, onStart, onTabClosedWithoutPayment }: {
+  sessionId: string
+  onStart: () => void
+  onTabClosedWithoutPayment: () => void
+}) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [polling, setPolling] = useState(false)
   const [paid, setPaid] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const tabRef  = useRef<Window | null>(null)
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
@@ -331,6 +339,17 @@ function IntakePayNowButton({ sessionId, onStart }: { sessionId: string; onStart
       } catch {
         // network hiccup — just try again next tick
       }
+
+      // Only reached if the check above did NOT confirm payment —
+      // meaning if the tab is now closed, this payment genuinely has
+      // no way to complete anymore.
+      if (tabRef.current && tabRef.current.closed) {
+        if (pollRef.current) clearInterval(pollRef.current)
+        setPolling(false)
+        onTabClosedWithoutPayment()
+        return
+      }
+
       if (Date.now() - startTime >= 5 * 60 * 1000) {
         if (pollRef.current) clearInterval(pollRef.current)
         setPolling(false)
@@ -345,6 +364,7 @@ function IntakePayNowButton({ sessionId, onStart }: { sessionId: string; onStart
     // Pre-open synchronously, before any await — browsers block
     // window.open() calls that happen after an async gap.
     const tab = window.open('', '_blank')
+    tabRef.current = tab
     try {
       const res = await fetch(`${API}/intake/create-payment-link`, {
         method: 'POST',
@@ -397,28 +417,31 @@ function IntakePayNowButton({ sessionId, onStart }: { sessionId: string; onStart
 
 const PAY_LATER_COUNTDOWN_SECONDS = 10
 
-// The one card shown after intake completes when a copay is due — two
-// real choices, not two suggestions: Pay Now hands off to Stripe with
-// no AI in the trigger path (see IntakePayNowButton); Pay Later commits
-// to ending the session outright rather than leaving it in limbo, with
-// a visible countdown before the automatic restart so the choice feels
-// deliberate rather than abrupt.
+type SessionEndReason = 'pay_later' | 'tab_closed' | null
+
+// The one card shown after intake completes when a copay is due. Two
+// paths can end the session with the SAME countdown-and-redirect UI,
+// each with its own message: the patient explicitly choosing "Pay
+// later", or Pay Now's tab being closed without payment completing.
 function PaymentAction({ sessionId, onSessionEnd }: { sessionId: string; onSessionEnd: () => void }) {
   const [payNowStarted, setPayNowStarted] = useState(false)
-  const [payLaterChosen, setPayLaterChosen] = useState(false)
+  const [endReason, setEndReason] = useState<SessionEndReason>(null)
   const [secondsLeft, setSecondsLeft] = useState(PAY_LATER_COUNTDOWN_SECONDS)
 
   useEffect(() => {
-    if (!payLaterChosen) return
+    if (!endReason) return
     if (secondsLeft <= 0) {
       onSessionEnd()
       return
     }
     const timer = setTimeout(() => setSecondsLeft(s => s - 1), 1000)
     return () => clearTimeout(timer)
-  }, [payLaterChosen, secondsLeft, onSessionEnd])
+  }, [endReason, secondsLeft, onSessionEnd])
 
-  if (payLaterChosen) {
+  if (endReason) {
+    const message = endReason === 'tab_closed'
+      ? "It looks like the payment tab was closed before completing payment. Please pay at the patient portal or at the clinic."
+      : "You can pay at the clinic or through the patient portal."
     return (
       <div style={{
         background: '#fdf4e8', border: '1px solid #e8c878',
@@ -428,7 +451,7 @@ function PaymentAction({ sessionId, onSessionEnd }: { sessionId: string; onSessi
       }}>
         <div style={{ fontSize: 13, color: '#8b6020', fontWeight: 600 }}>Session ended</div>
         <div style={{ fontSize: 12, color: '#8b6020', marginTop: 4 }}>
-          You can pay at the clinic or through the patient portal. Redirecting to start a new intake in {secondsLeft} second{secondsLeft !== 1 ? 's' : ''}...
+          {message} Redirecting to start a new intake in {secondsLeft} second{secondsLeft !== 1 ? 's' : ''}...
         </div>
       </div>
     )
@@ -443,9 +466,13 @@ function PaymentAction({ sessionId, onSessionEnd }: { sessionId: string; onSessi
       boxShadow: '0 2px 8px rgba(44,26,20,0.06)',
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <IntakePayNowButton sessionId={sessionId} onStart={() => setPayNowStarted(true)} />
+        <IntakePayNowButton
+          sessionId={sessionId}
+          onStart={() => setPayNowStarted(true)}
+          onTabClosedWithoutPayment={() => setEndReason('tab_closed')}
+        />
         {!payNowStarted && (
-          <button onClick={() => setPayLaterChosen(true)} style={{
+          <button onClick={() => setEndReason('pay_later')} style={{
             padding: '9px 20px', borderRadius: 8,
             background: 'transparent', border: '1.5px solid #8b5e52',
             color: '#8b5e52', fontSize: 13, fontWeight: 600,

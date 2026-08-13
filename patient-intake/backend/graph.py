@@ -27,6 +27,17 @@ AGE NOTE: calculate_age is deliberately handled directly in this file's
 tool-execution loop (like get_current_date), NOT routed through
 mcp_client.py — age math has nothing to do with external FHIR/insurance
 systems, so treating it as an MCP tool call was wrong.
+
+REDIRECT-EXTRACTION ORDER NOTE: the redirect JSON is pulled out of the
+model's raw text BEFORE any cleanup (_strip_leaked_reasoning, etc.) runs
+— not after. _strip_leaked_reasoning has a whole-message wipe for leaked
+internal reasoning (e.g. an agent accidentally stating a silent check's
+result in words); if a redirect JSON happened to share the same response
+as a leaked fragment, running cleanup first would wipe the ENTIRE text —
+redirect included — causing a silent dead end (empty reply, no forward
+progress, patient sees "Something went wrong"). Extracting the redirect
+first means it survives regardless of what cleanup does to the text
+around it.
 """
 import json
 from typing import TypedDict, Optional, Literal
@@ -234,10 +245,16 @@ def _make_agent_node(agent_name: str):
             )
 
             if response.stop_reason != "tool_use":
-                turn_text = " ".join(
+                raw_text = " ".join(
                     b.text for b in response.content if b.type == "text"
                 ).strip()
-                turn_text = _strip_leaked_reasoning(turn_text)
+
+                # Extract the redirect signal FIRST, on the raw model
+                # output, before any cleanup runs — see module docstring
+                # for why this order matters.
+                parsed_redirect, raw_text_without_redirect = _extract_redirect(raw_text)
+
+                turn_text = _strip_leaked_reasoning(raw_text_without_redirect)
                 turn_text = _force_list_item_newline(turn_text)
                 turn_text = await _reflect(turn_text, messages)
                 print(f"[graph] {agent_name} said: {turn_text[:200]!r}")
@@ -247,7 +264,7 @@ def _make_agent_node(agent_name: str):
                 new_return_to = state.get("return_to")
                 captured_department = state.get("department")
 
-                parsed_redirect, turn_text_without_redirect = _extract_redirect(turn_text)
+                turn_text_without_redirect = turn_text  # already redirect-free
                 if parsed_redirect is not None:
                     target = parsed_redirect.get("redirect")
                     if target == agent_name:
