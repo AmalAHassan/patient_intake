@@ -424,19 +424,24 @@ _MINOR_DETERMINATION_MARKERS = [
 ]
 
 
-def _is_identity_agent_skipping_age_tool(text: str, age_tool_used_this_turn: bool) -> bool:
+def _is_identity_agent_skipping_age_tool(text: str, age_checked: bool) -> bool:
     """
-    The minor check used to have the model do its own year-subtraction
-    arithmetic and it was unreliable — wrong current year assumed, wrong
-    handling of whether the birthday had passed yet, sometimes both in
-    the same conversation. IDENTITY_PROMPT now requires calling
-    `calculate_age` and trusting its `is_minor` field instead of doing
-    any math itself. This is a deterministic backstop for the case where
-    the model states an age-based determination (minor, guardian
-    questions, restating an age) without having actually called that
-    tool this turn — i.e. it's guessing again instead of using the tool.
+    Deterministic backstop for the case where the model states an
+    age-based determination (minor, guardian questions, restating an
+    age) WITHOUT age ever having been genuinely calculated at any point
+    in this conversation. Uses age_checked (persists across the WHOLE
+    conversation, set once calculate_age genuinely succeeds) rather than
+    a this-turn-only signal — a this-turn signal is structurally unable
+    to distinguish "guessing at age right now, tool never called" from
+    "tool was called an iteration or two ago, this is a legitimate
+    guardian-name follow-up" — both look identical if you only look at
+    whether the tool was called in the SAME turn as the text. Once
+    age_checked is True, guardian-related follow-up questions are
+    expected, correct behavior per IDENTITY_PROMPT ("never call
+    calculate_age again") — not a violation — so this guard goes silent
+    from that point forward for the rest of the conversation.
     """
-    if age_tool_used_this_turn:
+    if age_checked:
         return False
     lower = text.lower()
     return any(m in lower for m in _MINOR_DETERMINATION_MARKERS)

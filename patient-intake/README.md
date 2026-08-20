@@ -152,7 +152,6 @@ curl http://localhost:8080/fhir/metadata | head -5
 ```bash
 cd patient-intake
 source backend/.venv/bin/activate
-#make dev
 cd backend
 uvicorn main:app --reload --port 8000
 ```

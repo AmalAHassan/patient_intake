@@ -6,40 +6,9 @@ for-loop with a LangGraph StateGraph: five nodes (identity, insurance,
 routing, scheduling, payment), each handling its OWN internal tool-calling
 loop exactly as before.
 
-IMPORTANT DESIGN NOTE: this does NOT use LangGraph's interrupt() for
-"wait for the next patient message" — an earlier version did, but testing
-revealed that interrupt() re-executes ALL prior code in a node from the
-top on every resume. Instead, each chat message is its own separate
-graph.ainvoke() call — a node either hands off to another agent within
-the SAME invocation (a redirect, signaled via just_redirected), or the
-invocation simply ENDS once an agent has a plain question for the
-patient. The checkpointer persists current_agent correctly, so the next
-real chat message becomes a fresh, independent invocation that resumes
-at the right agent with no re-execution of anything.
-
-PAYMENT NOTE: the payment agent never calls Stripe or redirects anywhere
-after completion — it only saves the record and emits the completion
-JSON. The actual payment link is created entirely outside this graph,
-by a deterministic backend endpoint triggered by a real "Pay now"
-button, with zero AI involvement in that decision.
-
-AGE NOTE: calculate_age is deliberately handled directly in this file's
-tool-execution loop (like get_current_date), NOT routed through
-mcp_client.py — age math has nothing to do with external FHIR/insurance
-systems, so treating it as an MCP tool call was wrong.
-
-REDIRECT-EXTRACTION ORDER NOTE: the redirect JSON is pulled out of the
-model's raw text BEFORE any cleanup (_strip_leaked_reasoning, etc.) runs
-— not after. _strip_leaked_reasoning has a whole-message wipe for leaked
-internal reasoning (e.g. an agent accidentally stating a silent check's
-result in words); if a redirect JSON happened to share the same response
-as a leaked fragment, running cleanup first would wipe the ENTIRE text —
-redirect included — causing a silent dead end (empty reply, no forward
-progress, patient sees "Something went wrong"). Extracting the redirect
-first means it survives regardless of what cleanup does to the text
-around it.
 """
 import json
+import re
 from typing import TypedDict, Optional, Literal
 from datetime import date
 
@@ -70,6 +39,23 @@ from services.claude import (
     _block_to_dict,
 )
 
+# A single guard firing more than this many times in ONE turn means the
+# model is genuinely stuck on this specific issue, not just needing one
+# more nudge. Rather than burning through the entire MAX_TOOL_ITERATIONS
+# budget, stop immediately and hand off to a real staff member instead.
+MAX_GUARD_RETRIES_PER_TYPE = 3
+
+# Numeric crisis codes need WORD-BOUNDARY matching, not plain substring —
+# a plain "988" in kw in text.lower() check matches ANY digit sequence
+# containing 988, including a patient's own birth year (07/22/1988) or
+# phone number, causing a false mental-health-crisis alert on a
+# completely ordinary identity confirmation. \b988\b only matches "988"
+# as a standalone token — real text keywords like "suicide" don't have
+# this collision risk, since they're not substrings of unrelated numbers,
+# so only the numeric codes need this special handling.
+_CRISIS_NUMERIC_CODES_RE = re.compile(r'\b(988|911)\b')
+_CRISIS_TEXT_KEYWORDS = ["suicide", "crisis lifeline", "immediate danger", "emergency_redirect"]
+
 
 class IntakeState(TypedDict):
     messages: list
@@ -83,7 +69,6 @@ class IntakeState(TypedDict):
     session_id: str
     lookup_count: int
     just_redirected: bool
-    # Populated only once a terminal status is reached
     status: Optional[str]
     final_reply: Optional[str]
     data: Optional[dict]
@@ -105,11 +90,12 @@ SELF_REDIRECT_CORRECTION = (
 
 AGE_GUESS_CORRECTION = (
     "You just asked about age, 18, or date-of-birth verification, or "
-    "stated a minor/guardian determination — without calling "
-    "calculate_age this turn. Never ask the patient to confirm their age "
-    "or DOB, and never guess or compute it yourself. Call calculate_age "
-    "now with their DOB exactly as already given, then base your next "
-    "message only on its is_minor field, silently."
+    "stated a minor/guardian determination — without calculate_age ever "
+    "having been called yet in this conversation. Never ask the patient "
+    "to confirm their age or DOB, and never guess or compute it "
+    "yourself. Call calculate_age now with their DOB exactly as already "
+    "given, then base your next message only on its is_minor field, "
+    "silently."
 )
 
 AGE_REVERIFY_CORRECTION = (
@@ -128,13 +114,6 @@ MASKING_NEW_PATIENT_CORRECTION = (
     "again."
 )
 
-# The one, single, fixed "normal completion" target for each agent —
-# matches the exact JSON template hardcoded in each agent's own prompt.
-# Never ambiguous: identity always -> insurance, scheduling always ->
-# payment, etc. Payment has no entry here — it never redirects forward,
-# it only completes. Corrections (going to an EARLIER agent) are the
-# only legitimate exception to this map, and only when the patient's
-# own words actually asked for one — see _patient_requested_correction.
 NEXT_AGENT = {
     "identity":   "insurance",
     "insurance":  "routing",
@@ -163,14 +142,6 @@ VALID_DEPARTMENTS = [
 
 
 def _infer_department_from_messages(messages: list) -> Optional[str]:
-    """
-    Deterministic fallback for when department was never captured via a
-    clean redirect JSON — e.g. the routing-repetition safety valve forces
-    an advance to scheduling without ever emitting that JSON. Scans
-    recent messages for an exact department name — same style as the
-    other guard functions in this file: simple, deterministic, no model
-    call involved.
-    """
     for msg in reversed(messages[-6:]):
         content = msg.get("content")
         if not isinstance(content, str):
@@ -182,14 +153,6 @@ def _infer_department_from_messages(messages: list) -> Optional[str]:
 
 
 def _last_real_patient_message(messages: list) -> str:
-    """
-    Scans backward for the last message that's genuine patient-typed
-    text — role "user" AND a plain string content. NOT just messages[-1]:
-    tool results are also stored as role "user" in this codebase, but
-    with list content (tool_result blocks), not a string. Using the
-    wrong one here would mean checking a tool's output instead of what
-    the patient actually said.
-    """
     for msg in reversed(messages):
         if msg.get("role") == "user" and isinstance(msg.get("content"), str):
             return msg["content"]
@@ -197,61 +160,34 @@ def _last_real_patient_message(messages: list) -> str:
 
 
 def _patient_requested_correction(last_message: str) -> bool:
-    """
-    Deterministic check for genuine correction intent, not the model's
-    own claim about it. If the patient's actual words don't contain any
-    of these signals, a redirect to something other than the expected
-    next agent has no legitimate basis and should be rejected the same
-    way a self-redirect already is.
-    """
     text = last_message.strip().lower()
     return any(word in text for word in _CORRECTION_SIGNAL_WORDS)
 
 
 def _make_agent_node(agent_name: str):
-    """
-    Returns a node function for one agent. All five nodes share this same
-    implementation, parameterized by agent_name — mirrors how the old
-    claude.py loop handled whichever agent was currently active, just
-    scoped to a single agent per node instead of a generic mega-loop.
-    """
-
     async def node(state: IntakeState) -> dict:
         messages = list(state["messages"])
         lookup_count = state.get("lookup_count", 0)
         slots_ever_called = state.get("slots_ever_called", False)
         age_checked = state.get("age_checked", False)
         routing_stall = state.get("routing_turns_without_redirect", 0)
+        guard_fire_counts: dict = {}
 
         system = orchestrator.build_system_prompt(agent_name)
         scoped_tools = orchestrator.get_tools_for_agent(agent_name, TOOLS)
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            age_tool_used_this_turn = False
-
             response = anthropic_client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
                 temperature=TEMPERATURE,
-                system=[
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=messages,
                 tools=scoped_tools,
             )
 
             if response.stop_reason != "tool_use":
-                raw_text = " ".join(
-                    b.text for b in response.content if b.type == "text"
-                ).strip()
-
-                # Extract the redirect signal FIRST, on the raw model
-                # output, before any cleanup runs — see module docstring
-                # for why this order matters.
+                raw_text = " ".join(b.text for b in response.content if b.type == "text").strip()
                 parsed_redirect, raw_text_without_redirect = _extract_redirect(raw_text)
 
                 turn_text = _strip_leaked_reasoning(raw_text_without_redirect)
@@ -264,16 +200,13 @@ def _make_agent_node(agent_name: str):
                 new_return_to = state.get("return_to")
                 captured_department = state.get("department")
 
-                turn_text_without_redirect = turn_text  # already redirect-free
+                turn_text_without_redirect = turn_text
                 if parsed_redirect is not None:
                     target = parsed_redirect.get("redirect")
                     if target == agent_name:
                         print(f"[graph] REJECTED self-redirect: {agent_name} -> {agent_name}")
                         messages.append({"role": "assistant", "content": turn_text_without_redirect})
-                        messages.append({
-                            "role": "user",
-                            "content": SELF_REDIRECT_CORRECTION.format(target=target),
-                        })
+                        messages.append({"role": "user", "content": SELF_REDIRECT_CORRECTION.format(target=target)})
                         continue
 
                     if target in orchestrator.AGENTS:
@@ -291,10 +224,8 @@ def _make_agent_node(agent_name: str):
                             messages.append({
                                 "role": "user",
                                 "content": WRONG_TARGET_CORRECTION.format(
-                                    target=target,
-                                    agent_name=agent_name,
-                                    expected=expected_next,
-                                    last_message=last_message,
+                                    target=target, agent_name=agent_name,
+                                    expected=expected_next, last_message=last_message,
                                 ),
                             })
                             continue
@@ -329,7 +260,7 @@ def _make_agent_node(agent_name: str):
                     is_guessing_age = (
                         agent_name == "identity"
                         and not handled_redirect
-                        and _is_identity_agent_skipping_age_tool(turn_text, age_tool_used_this_turn)
+                        and _is_identity_agent_skipping_age_tool(turn_text, age_checked)
                     )
                     is_needless_reverify = (
                         agent_name == "identity"
@@ -344,6 +275,7 @@ def _make_agent_node(agent_name: str):
                     if (is_fabricated_slots or is_asking_before_tool or is_routing_straying
                             or is_guessing_age or is_needless_reverify or is_masking_new_patient):
                         if is_fabricated_slots:
+                            guard_name = "fabricated_slots"
                             correction = (
                                 "You mentioned specific doctors, dates, or times without "
                                 "actually calling fhir_get_slots. Do not invent slot data. "
@@ -351,6 +283,7 @@ def _make_agent_node(agent_name: str):
                                 "ONLY the real results it returns."
                             )
                         elif is_asking_before_tool:
+                            guard_name = "asking_before_tool"
                             correction = (
                                 "Call fhir_get_slots now, with just the department — do "
                                 "not ask the patient for a day/time preference first. Show "
@@ -358,6 +291,7 @@ def _make_agent_node(agent_name: str):
                                 "they'd like something different."
                             )
                         elif is_routing_straying:
+                            guard_name = "routing_straying"
                             correction = (
                                 "You are the routing agent — you have no scheduling "
                                 "tools and cannot show appointment times or availability. "
@@ -366,12 +300,41 @@ def _make_agent_node(agent_name: str):
                                 '{"redirect": "scheduling", "reason": "routing complete"}'
                             )
                         elif is_guessing_age:
+                            guard_name = "guessing_age"
                             correction = AGE_GUESS_CORRECTION
                         elif is_needless_reverify:
+                            guard_name = "needless_reverify"
                             correction = AGE_REVERIFY_CORRECTION
                         else:
+                            guard_name = "masking_new_patient"
                             correction = MASKING_NEW_PATIENT_CORRECTION
-                        print(f"[graph] REJECTED (guard triggered): {turn_text[:150]}")
+
+                        guard_fire_counts[guard_name] = guard_fire_counts.get(guard_name, 0) + 1
+                        print(f"[graph] REJECTED (guard={guard_name}, count={guard_fire_counts[guard_name]}): {turn_text[:150]}")
+
+                        if guard_fire_counts[guard_name] > MAX_GUARD_RETRIES_PER_TYPE:
+                            print(f"[graph] GUARD RETRY CEILING HIT for '{guard_name}' ({guard_fire_counts[guard_name]} attempts) — escalating to staff_requested")
+                            escalation_msg = (
+                                "I'm having trouble completing this step online right now. "
+                                "A staff member will follow up with you shortly to finish "
+                                "your registration."
+                            )
+                            messages.append({"role": "assistant", "content": escalation_msg})
+                            return {
+                                "messages": messages,
+                                "current_agent": agent_name,
+                                "routing_turns_without_redirect": routing_stall,
+                                "slots_ever_called": slots_ever_called,
+                                "age_checked": age_checked,
+                                "lookup_count": lookup_count,
+                                "just_redirected": False,
+                                "status": "staff_requested",
+                                "final_reply": escalation_msg,
+                                "data": None,
+                                "payment": None,
+                                "payment_url": None,
+                            }
+
                         messages.append({"role": "assistant", "content": turn_text})
                         messages.append({"role": "user", "content": correction})
                         continue
@@ -379,9 +342,6 @@ def _make_agent_node(agent_name: str):
                     messages.append({"role": "assistant", "content": turn_text})
 
                 if handled_redirect:
-                    # Same invocation continues immediately into the new
-                    # agent's node — no waiting needed, no re-execution
-                    # risk, since this never goes through interrupt().
                     return {
                         "messages": messages,
                         "current_agent": next_agent,
@@ -400,14 +360,6 @@ def _make_agent_node(agent_name: str):
                     routing_stall = (routing_stall + 1) if is_repeat else 1
 
                     if routing_stall >= 2:
-                        # Routing has said the EXACT same thing twice in a
-                        # row — genuinely stuck, not just working through
-                        # a legitimate multi-step conversation. Still show
-                        # what it just said normally (don't discard a real
-                        # reply), but append a clear transition and hand
-                        # off cleanly on the NEXT invocation instead of
-                        # cascading into scheduling mid-invocation with
-                        # incomplete context.
                         print(f"[graph] FORCED ADVANCE: routing repeated itself {routing_stall}x")
                         transition_text = (
                             turn_text + " Let's go ahead and get you scheduled — "
@@ -428,7 +380,6 @@ def _make_agent_node(agent_name: str):
                             "final_reply": transition_text,
                         }
 
-                # Check for terminal statuses embedded in turn_text
                 terminal = _check_terminal_status(turn_text, state["session_id"])
                 if terminal is not None:
                     return {
@@ -442,13 +393,6 @@ def _make_agent_node(agent_name: str):
                         **terminal,
                     }
 
-                # Plain patient-facing question — this invocation ends
-                # HERE, naturally. No interrupt(), no re-execution risk:
-                # the NEXT patient message becomes an entirely separate
-                # graph.ainvoke() call (same thread_id), which the
-                # checkpointer resumes with current_agent already set
-                # correctly to this same agent, ready to receive the
-                # patient's reply as a fresh user message.
                 return {
                     "messages": messages,
                     "current_agent": agent_name,
@@ -462,15 +406,12 @@ def _make_agent_node(agent_name: str):
                     "final_reply": turn_text,
                 }
 
-            # stop_reason == "tool_use" — execute tools, same as before
             for block in response.content:
                 block_type = getattr(block, "type", "")
                 block_name = getattr(block, "name", "")
                 if block_type == "tool_use" and block_name == "fhir_get_slots":
                     print(f"[graph] fhir_get_slots called — input: {block.input}")
                     slots_ever_called = True
-                elif block_type == "tool_use" and block_name == "calculate_age":
-                    age_tool_used_this_turn = True
                 elif block_type == "tool_use":
                     print(f"[tool] {agent_name} called {block_name} — input: {block.input}")
                 if getattr(block, "name", "") == "lookup_patient":
@@ -489,9 +430,6 @@ def _make_agent_node(agent_name: str):
                         "month": today.month, "day": today.day,
                     })
                 elif block.name == "calculate_age":
-                    # Handled directly here, NOT via call_tool()/mcp_client.py
-                    # — age math has nothing to do with external FHIR/
-                    # insurance systems.
                     content = _calculate_age(block.input.get("dob", ""))
                     try:
                         parsed_age = json.loads(content)
@@ -503,15 +441,9 @@ def _make_agent_node(agent_name: str):
                     content = "MAX_RETRIES_EXCEEDED — tell the patient a staff member will assist them."
                 else:
                     content = await call_tool(block.name, block.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": content,
-                })
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
             messages.append({"role": "user", "content": tool_results})
 
-        # MAX_TOOL_ITERATIONS exhausted without a plain reply — end this
-        # invocation with a generic fallback rather than looping forever.
         fallback = (
             "Sorry, I'm having some trouble right now. A staff member "
             "will follow up with you shortly to continue your registration."
@@ -535,13 +467,23 @@ def _check_terminal_status(turn_text: str, session_id: str) -> Optional[dict]:
     Parses turn_text for the same terminal-status JSON signals the old
     chat() function checked for at the very end, after the loop exited.
     Returns a state-update dict if a terminal status was found, else None.
+
+    Numeric crisis codes (988, 911) use WORD-BOUNDARY matching — a plain
+    substring check would false-positive on any DOB, phone number, or
+    address containing that digit sequence (e.g. a patient born in 1988).
+    Text keywords ("suicide", etc.) don't have this collision risk, so
+    they stay as plain substring checks.
     """
-    crisis_keywords = ["988", "suicide", "crisis lifeline", "911", "immediate danger", "emergency_redirect"]
     is_emergency = (
         '{"status": "emergency_redirect"}' in turn_text
-        or any(kw in turn_text.lower() for kw in crisis_keywords)
+        or bool(_CRISIS_NUMERIC_CODES_RE.search(turn_text))
+        or any(kw in turn_text.lower() for kw in _CRISIS_TEXT_KEYWORDS)
     )
     if is_emergency:
+        matched_numeric = _CRISIS_NUMERIC_CODES_RE.findall(turn_text)
+        matched_text = [kw for kw in _CRISIS_TEXT_KEYWORDS if kw in turn_text.lower()]
+        print(f"[debug] EMERGENCY TRIGGERED — numeric: {matched_numeric}, text: {matched_text}")
+        print(f"[debug] FULL untruncated turn_text: {turn_text!r}")
         friendly = turn_text
         if '{"status": "emergency_redirect"}' in turn_text:
             friendly = turn_text[:turn_text.find('{"status": "emergency_redirect"}')].strip()
@@ -596,11 +538,6 @@ def _route_after_agent(state: IntakeState) -> str:
 
 
 def build_graph(checkpointer=None):
-    """
-    Builds and compiles the intake StateGraph. Pass a checkpointer
-    explicitly (e.g. AsyncPostgresSaver for production); defaults to an
-    in-memory one, which is all unit tests and local dev need.
-    """
     builder = StateGraph(IntakeState)
     for name in orchestrator.STEP_ORDER:
         builder.add_node(name, _make_agent_node(name))
@@ -612,5 +549,4 @@ def build_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or MemorySaver())
 
 
-# Module-level default graph instance for the API layer to import directly.
 graph = build_graph()
