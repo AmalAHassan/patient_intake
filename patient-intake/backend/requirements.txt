@@ -6,7 +6,7 @@ python-multipart==0.0.32
 sqlalchemy==2.0.49
 psycopg2-binary>=2.9.10
 redis==5.0.1
-anthropic>=0.111.0
+anthropic==0.111.0
 fastmcp==2.14.7
 mcp>=1.28.0
 sse-starlette>=3.4.5
@@ -21,4 +21,4 @@ python-dateutil>=2.9.0
 cryptography>=49.0.0
 PyJWT>=2.13.0
 colorama>=0.4.6
-langgraph
+langgraph==1.2.10
