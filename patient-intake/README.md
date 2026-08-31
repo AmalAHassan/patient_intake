@@ -145,6 +145,11 @@ Starts PostgreSQL, Redis, and HAPI FHIR in the background. Wait about 20 seconds
 
 ```bash
 curl http://localhost:8080/fhir/metadata | head -5
+psql postgresql://intake_user:intake_password@localhost:5432/intake_db
+\dt
+SELECT Name, appointment_date, appointment_time, appointment_status, payment_status   FROM patients ORDER BY created_at 
+DESC LIMIT 10;
+\q
 ```
 
 **Terminal 2 — start the backend:**
