@@ -42,9 +42,8 @@ class Settings(BaseSettings):
     cerner_client_secret: str = ""
 
     # MCP server URLs (ngrok or deployed public URLs)
-    mcp_patient_lookup_url: str = "http://localhost:5001/sse"
-    mcp_eligibility_url: str = "http://localhost:5002/sse"
-    mcp_ehr_url: str = "http://localhost:5003/sse"
-
+    mcp_patient_lookup_url: str = "http://localhost:5101"
+    mcp_eligibility_url: str = "http://localhost:5102"
+    mcp_ehr_url: str = "http://localhost:5103"
 
 settings = Settings()

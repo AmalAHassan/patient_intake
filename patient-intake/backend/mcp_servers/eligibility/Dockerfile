@@ -10,9 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # itself.
 COPY mcp_servers/eligibility/ mcp_servers/eligibility/
 
-# Only 5002 (MCP/SSE) needs to be reachable from outside.
-# 5102 stays internal — same reasoning as patient-lookup's 5101.
-EXPOSE 5002
+# 5102 is the FastAPI /call port that mcp_client.py actually hits.
+# 5002 is only the FastMCP SSE transport — unused by this architecture.
+EXPOSE 5102
 
 ENV MCP_BACKEND_DIR=/app
 
